@@ -481,7 +481,17 @@ function showFreezeFrame() {
   const canvas = document.getElementById('freeze-canvas');
   canvas.width = video.videoWidth || window.innerWidth;
   canvas.height = video.videoHeight || window.innerHeight;
-  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  const ctx = canvas.getContext('2d');
+  // Дзеркалимо canvas якщо фронтальна камера
+  if (facingMode === 'user') {
+    ctx.save();
+    ctx.translate(canvas.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  } else {
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  }
   canvas.style.opacity = S.freezeOpacity;
   canvas.style.display = 'block';
   document.getElementById('pause-overlay').classList.add('active');
@@ -563,7 +573,7 @@ async function analyzeAudioBounds(blob) {
   return { start, end };
 }
 
-// ── РЕНДЕР ──
+// ── РЕНДЕР — без перекодування, тільки trim + concat ──
 async function startRender() {
   closeModal();
   if (takes.length === 0) return;
@@ -582,102 +592,85 @@ async function startRender() {
     return;
   }
 
-  ffmpeg.setProgress(({ ratio }) => {
-    if (ratio > 0) {
-      progFill.style.width = `${Math.round(ratio * 100)}%`;
-      progLabel.textContent = `РЕНДЕР ${Math.round(ratio * 100)}%`;
-    }
-  });
-
   try {
-    // Крок 1: аналіз тиші для всіх дублів (якщо увімкнено)
+    // Крок 1: аналіз тиші (якщо увімкнено)
     const trimBounds = [];
     if (S.trimSilence) {
       for (let i = 0; i < takes.length; i++) {
         progLabel.textContent = `АНАЛІЗ ТИШІ ${i+1}/${takes.length}...`;
         progFill.style.width = `${Math.round((i+1)/takes.length * 20)}%`;
         const bounds = await analyzeAudioBounds(takes[i].blob);
-        trimBounds.push(bounds); // null якщо тиші нема
+        trimBounds.push(bounds);
       }
     } else {
-      // Без trim — null для всіх
       takes.forEach(() => trimBounds.push(null));
     }
 
-    // Крок 2: записуємо файли у ffmpeg FS
-    progLabel.textContent = 'ЗАВАНТАЖЕННЯ ДУБЛІВ...';
-    const inputNames = [];
-    for (let i = 0; i < takes.length; i++) {
-      const name = `input_${i}.webm`;
-      const buffer = await takes[i].blob.arrayBuffer();
-      ffmpeg.FS('writeFile', name, new Uint8Array(buffer));
-      inputNames.push(name);
-      progFill.style.width = `${20 + Math.round((i+1)/takes.length * 25)}%`;
-    }
+    // Крок 2: записуємо файли у ffmpeg FS і обрізаємо якщо треба
+    progLabel.textContent = 'ОБРОБКА ДУБЛІВ...';
+    const processedNames = [];
 
-    // Крок 3: будуємо filter_complex
-    // Для кожного дубля: відео і аудіо обробляємо РАЗОМ в одному блоці
-    const filterParts = [];
     for (let i = 0; i < takes.length; i++) {
+      const inName = `in_${i}.webm`;
+      const buffer = await takes[i].blob.arrayBuffer();
+      ffmpeg.FS('writeFile', inName, new Uint8Array(buffer));
+
       const b = trimBounds[i];
       if (b) {
-        // Є тиша — обрізаємо і відео і аудіо синхронно
-        const ss = b.start.toFixed(3);
-        const ee = b.end.toFixed(3);
-        filterParts.push(
-          `[${i}:v]trim=${ss}:${ee},setpts=PTS-STARTPTS,scale=trunc(iw/2)*2:trunc(ih/2)*2[v${i}]`,
-          `[${i}:a]atrim=${ss}:${ee},asetpts=PTS-STARTPTS[a${i}]`
+        // Обрізаємо без перекодування — миттєво
+        const outName = `trimmed_${i}.webm`;
+        await ffmpeg.run(
+          '-i', inName,
+          '-ss', b.start.toFixed(3),
+          '-to', b.end.toFixed(3),
+          '-c', 'copy',
+          outName
         );
+        try { ffmpeg.FS('unlink', inName); } catch(e) {}
+        processedNames.push(outName);
       } else {
-        // Без trim — тільки scale для відео
-        filterParts.push(
-          `[${i}:v]scale=trunc(iw/2)*2:trunc(ih/2)*2[v${i}]`,
-          `[${i}:a]acopy[a${i}]`
-        );
+        processedNames.push(inName);
       }
+
+      progFill.style.width = `${20 + Math.round((i+1)/takes.length * 50)}%`;
     }
 
-    // Concat всіх дублів
-    const concatIn = takes.map((_, i) => `[v${i}][a${i}]`).join('');
-    filterParts.push(`${concatIn}concat=n=${takes.length}:v=1:a=1[vout][aout]`);
-    const filterComplex = filterParts.join(';');
+    // Крок 3: склеюємо через concat demuxer — без перекодування
+    progLabel.textContent = 'СКЛЕЙКА...';
+    progFill.style.width = '75%';
 
-    progLabel.textContent = 'КОНВЕРТАЦІЯ В MP4...';
-    progFill.style.width = '47%';
+    const ext = takes[0].mimeType.includes('mp4') ? 'mp4' : 'webm';
+    const outMime = takes[0].mimeType;
 
-    // Крок 4: один виклик ffmpeg
-    const args = [];
-    inputNames.forEach(n => args.push('-i', n));
-    args.push(
-      '-filter_complex', filterComplex,
-      '-map', '[vout]',
-      '-map', '[aout]',
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-crf', '23',
-      '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac',
-      '-b:a', `${S.audioBitrate}`,
-      '-movflags', '+faststart',
-      'output.mp4'
-    );
+    if (processedNames.length === 1) {
+      // Один дубль — просто читаємо
+      const data = ffmpeg.FS('readFile', processedNames[0]);
+      const url = URL.createObjectURL(new Blob([data.buffer], { type: outMime }));
+      downloadFile(url, `TAKE_${Date.now()}.${ext}`);
+    } else {
+      // Concat list
+      const listContent = processedNames.map(n => `file '${n}'`).join('\n');
+      ffmpeg.FS('writeFile', 'list.txt', new TextEncoder().encode(listContent));
 
-    await ffmpeg.run(...args);
+      await ffmpeg.run(
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', 'list.txt',
+        '-c', 'copy',
+        `output.${ext}`
+      );
 
-    // Крок 5: читаємо і скачуємо
-    progLabel.textContent = 'ЗБЕРЕЖЕННЯ...';
-    const data = ffmpeg.FS('readFile', 'output.mp4');
-    if (!data || data.length < 1000) throw new Error('Файл порожній');
+      try { ffmpeg.FS('unlink', 'list.txt'); } catch(e) {}
 
-    const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
-    const a = document.createElement('a');
-    a.href = url; a.download = `TAKE_${Date.now()}.mp4`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+      const data = ffmpeg.FS('readFile', `output.${ext}`);
+      const url = URL.createObjectURL(new Blob([data.buffer], { type: outMime }));
+      downloadFile(url, `TAKE_${Date.now()}.${ext}`);
 
-    // Очищення FS
-    inputNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e){} });
-    try { ffmpeg.FS('unlink', 'output.mp4'); } catch(e){}
+      try { ffmpeg.FS('unlink', `output.${ext}`); } catch(e) {}
+    }
+
+    // Очищення
+    processedNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e) {} });
 
     progFill.style.width = '100%';
     progLabel.textContent = 'ГОТОВО!';
@@ -692,11 +685,17 @@ async function startRender() {
   } catch(err) {
     console.error('Render error:', err);
     progLabel.textContent = 'ПОМИЛКА: ' + err.message;
-    progFill.style.width = '100%';
     await new Promise(r => setTimeout(r, 4000));
   } finally {
     progWindow.classList.remove('show');
   }
+}
+
+function downloadFile(url, filename) {
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 // ── BLUETOOTH / КЛАВІАТУРА ──
