@@ -15,7 +15,7 @@
   #video.mirrored { transform:scaleX(-1); }
 
   #freeze-canvas { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; display:none; z-index:2; opacity:0.35; filter:grayscale(100%); }
-  #pause-overlay { position:fixed; inset:0; background:rgba(10,10,10,0.25); opacity:0; pointer-events:none; transition:opacity 0.25s ease; z-index:3; }
+  #pause-overlay { position:fixed; inset:0; background:rgba(10,10,10,0.25); opacity:0; pointer-events:none; transition:opacity 0.2s ease; z-index:3; }
   #pause-overlay.active { opacity:1; }
 
   #rec-badge { position:fixed; top:20px; left:20px; display:flex; align-items:center; gap:8px; z-index:20; opacity:0; transition:opacity 0.2s; }
@@ -214,14 +214,14 @@
         <div id="toggle-trim" class="toggle" onclick="toggleTrim()"></div>
       </div>
       <div id="trim-options" style="margin-top:14px;display:none">
-        <div class="setting-label">ПОРІГ ТИШІ <span id="trim-label">-40 dB</span></div>
+        <div class="setting-label">ЧУТЛИВІСТЬ ГОЛОСУ (RMS) <span id="trim-label">0.05</span></div>
         <div class="slider-wrap">
-          <span style="font-size:10px;opacity:0.4">-60</span>
-          <input type="range" id="trim-slider" min="-60" max="-20" step="1" value="-40" oninput="setTrimThreshold(this)">
-          <span style="font-size:10px;opacity:0.4">-20</span>
+          <span style="font-size:10px;opacity:0.4">0.01</span>
+          <input type="range" id="trim-slider" min="1" max="20" step="1" value="5" oninput="setTrimThreshold(this)">
+          <span style="font-size:10px;opacity:0.4">0.20</span>
         </div>
         <div style="font-size:10px;color:rgba(240,237,232,0.3);letter-spacing:1px;line-height:1.8;margin-top:8px">
-          Аналіз під час монтажу. -40 dB — рекомендовано.
+          Браузерний аналіз амплітуди. Менше значення — чутливіше до тихих звуків. Рекомендовано: 0.05.
         </div>
       </div>
     </div>
@@ -309,7 +309,7 @@ let stream = null, mediaRecorder = null;
 let currentChunks = [];
 let isRecording = false, isStopping = false;
 let timerInterval = null, timerStart = 0;
-let deleteClickTimeout = null, deleteClickCount = 0;
+let deleteClickCount = 0;
 let facingMode = 'environment';
 let sessionMimeType = null;
 let ffmpegInstance = null, isFFmpegLoading = false;
@@ -321,11 +321,17 @@ let S = {
   freezeOpacity: 0.35,
   fps: 30,
   trimSilence: false,
-  trimThreshold: -40,
+  trimThreshold: 0.05, 
 };
 
 function loadSettings() {
-  try { const s = localStorage.getItem(SETTINGS_KEY); if (s) Object.assign(S, JSON.parse(s)); } catch(e) {}
+  try { 
+    const s = localStorage.getItem(SETTINGS_KEY); 
+    if (s) {
+      Object.assign(S, JSON.parse(s));
+      if (S.trimThreshold < 0) S.trimThreshold = 0.05;
+    }
+  } catch(e) {}
 }
 function saveSettings() {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(S)); } catch(e) {}
@@ -349,8 +355,8 @@ async function applySettingsToUI() {
   document.getElementById('opacity-label').textContent = `${Math.round(S.freezeOpacity*100)}%`;
   document.getElementById('toggle-trim').classList.toggle('on', S.trimSilence);
   document.getElementById('trim-options').style.display = S.trimSilence ? 'block' : 'none';
-  document.getElementById('trim-slider').value = S.trimThreshold;
-  document.getElementById('trim-label').textContent = `${S.trimThreshold} dB`;
+  document.getElementById('trim-slider').value = S.trimThreshold * 100;
+  document.getElementById('trim-label').textContent = S.trimThreshold.toFixed(2);
   await updateMemLabel();
 }
 
@@ -365,7 +371,7 @@ function setFps(btn) { S.fps = parseInt(btn.dataset.fps); saveSettings(); applyS
 function setAudio(input) { S.audioBitrate = parseInt(input.value)*1000; document.getElementById('audio-label').textContent=`${input.value} kbps`; saveSettings(); }
 function setOpacity(input) { S.freezeOpacity=parseInt(input.value)/100; document.getElementById('opacity-label').textContent=`${input.value}%`; document.getElementById('freeze-canvas').style.opacity=S.freezeOpacity; saveSettings(); }
 function toggleTrim() { S.trimSilence=!S.trimSilence; document.getElementById('toggle-trim').classList.toggle('on',S.trimSilence); document.getElementById('trim-options').style.display=S.trimSilence?'block':'none'; saveSettings(); }
-function setTrimThreshold(input) { S.trimThreshold=parseInt(input.value); document.getElementById('trim-label').textContent=`${input.value} dB`; saveSettings(); }
+function setTrimThreshold(input) { S.trimThreshold=parseInt(input.value)/100; document.getElementById('trim-label').textContent=S.trimThreshold.toFixed(2); saveSettings(); }
 function openSettings() { updateMemLabel().then(()=>document.getElementById('settings-overlay').classList.add('show')); }
 function closeSettings() { document.getElementById('settings-overlay').classList.remove('show'); }
 function showStatus(msg) { document.getElementById('status-msg').textContent = msg; }
@@ -444,7 +450,6 @@ async function flipCamera() {
 
 function getSessionMimeType() {
   if (sessionMimeType) return sessionMimeType;
-  // ПРІОРИТЕТ НА АПАРТНИЙ H.264/AVC для усунення лагів та фризів на CPU під час запису
   const types = [
     'video/webm;codecs=h264,opus',
     'video/mp4;codecs=avc1,mp4a',
@@ -545,7 +550,7 @@ function _handleDelete() {
   if (isRecording) return;
   deleteClickCount++;
   if (deleteClickCount === 1) {
-    deleteClickTimeout = setTimeout(async () => {
+    setTimeout(async () => {
       if (deleteClickCount === 1) {
         await dbDeleteLastTake();
         await updateUI();
@@ -554,7 +559,6 @@ function _handleDelete() {
       deleteClickCount = 0;
     }, 300);
   } else if (deleteClickCount === 2) {
-    clearTimeout(deleteClickTimeout);
     deleteClickCount = 0;
     const hint = document.getElementById('delete-hint');
     dbGetTakes().then(takes => {
@@ -582,6 +586,62 @@ function closeModal() {
   document.getElementById('modal-overlay').classList.remove('show');
 }
 
+async function analyzeAudioSilence(blob, threshold) {
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const arrayBuffer = await blob.arrayBuffer();
+  
+  try {
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    const channelData = audioBuffer.getChannelData(0); 
+    const sampleRate = audioBuffer.sampleRate;
+    const totalSamples = channelData.length;
+    const duration = audioBuffer.duration;
+
+    const windowSize = Math.floor(sampleRate * 0.02); 
+    let startTime = 0;
+    let endTime = duration;
+
+    for (let i = 0; i < totalSamples; i += windowSize) {
+      let sum = 0;
+      let count = 0;
+      for (let j = i; j < i + windowSize && j < totalSamples; j++) {
+        sum += channelData[j] * channelData[j];
+        count++;
+      }
+      const rms = Math.sqrt(sum / count);
+      if (rms >= threshold) {
+        startTime = i / sampleRate;
+        break;
+      }
+    }
+
+    for (let i = totalSamples - windowSize; i >= 0; i -= windowSize) {
+      let sum = 0;
+      let count = 0;
+      for (let j = i; j < i + windowSize && j < totalSamples; j++) {
+        sum += channelData[j] * channelData[j];
+        count++;
+      }
+      const rms = Math.sqrt(sum / count);
+      if (rms >= threshold) {
+        endTime = (i + windowSize) / sampleRate;
+        break;
+      }
+    }
+
+    await audioCtx.close();
+    if (startTime >= endTime) { startTime = 0; endTime = duration; }
+    
+    startTime = Math.max(0, startTime - 0.1);
+    endTime = Math.min(duration, endTime + 0.1);
+
+    return { startTime, endTime };
+  } catch (e) {
+    await audioCtx.close();
+    return { startTime: 0, endTime: 0 };
+  }
+}
+
 async function startRender() {
   closeModal();
   const takes = await dbGetTakes();
@@ -593,124 +653,97 @@ async function startRender() {
   
   pr.classList.add('show');
   fill.style.width = '0%';
-  lbl.textContent = 'ІНІЦІАЛІЗАЦІЯ FFMPEG...';
 
   const ffmpeg = await initFFmpeg();
   if (!ffmpeg) {
-    alert('Помилка запуску FFmpeg. Перевірте локальні файли.');
+    alert('Помилка запуску FFmpeg.');
     pr.classList.remove('show');
     return;
   }
 
   try {
+    // Автоматично вибираємо розширення та кодеки на основі вихідного запису пристрою
+    const isMp4 = takes[0].mimeType.includes('mp4');
+    const ext = isMp4 ? 'mp4' : 'webm';
+    const audioCodec = isMp4 ? 'aac' : 'libopus';
+    
     let concatListContent = '';
     
     for (let i = 0; i < takes.length; i++) {
-      lbl.textContent = `ОБРОБКА ДУБЛЯ ${i + 1} З ${takes.length}...`;
-      fill.style.width = `${Math.round((i / takes.length) * 50)}%`;
+      lbl.textContent = `АНАЛІЗ АУДІО ДУБЛЯ ${i + 1} З ${takes.length}...`;
+      fill.style.width = `${Math.round((i / takes.length) * 40)}%`;
 
-      const inputName = `input_${i}.webm`;
-      const processedName = `processed_${i}.mp4`;
+      const inputName = `input_${i}.${ext}`;
+      const processedName = `processed_${i}.${ext}`;
       
       const buffer = await takes[i].blob.arrayBuffer();
       ffmpeg.FS('writeFile', inputName, new Uint8Array(buffer));
 
       if (S.trimSilence) {
-        lbl.textContent = `АНАЛІЗ ТИШІ НА ДУБЛІ ${i + 1}...`;
+        const bounds = await analyzeAudioSilence(takes[i].blob, S.trimThreshold);
+        lbl.textContent = `ЗРІЗ ТИШІ ДУБЛЯ ${i + 1} (${bounds.startTime.toFixed(2)}с - ${bounds.endTime.toFixed(2)}с)...`;
         
-        let silenceStart = 0;
-        let silenceEnd = null;
-        let duration = 0;
-
-        ffmpeg.setLogger(({ type, message }) => {
-          if (message.includes('silence_start:')) {
-            const match = message.match(/silence_start:\s*([\d.]+)/);
-            if (match) silenceStart = parseFloat(match[1]);
-          }
-          if (message.includes('silence_end:')) {
-            const match = message.match(/silence_end:\s*([\d.]+)/);
-            if (match) silenceEnd = parseFloat(match[1]);
-          }
-          if (message.includes('Duration:')) {
-            const match = message.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
-            if (match) {
-              duration = parseInt(match[1])*3600 + parseInt(match[2])*60 + parseFloat(match[3]);
-            }
-          }
-        });
-
-        // Запуск детектора тиші
-        await ffmpeg.run('-i', inputName, '-af', `silencedetect=noise=${S.trimThreshold}dB:d=0.3`, '-f', 'null', '-');
-        ffmpeg.setLogger(() => {}); // скидання логера
-
-        let startTime = 0;
-        // Якщо тиша визначена з самого початку відео
-        if (silenceStart === 0 && silenceEnd !== null) {
-          startTime = silenceEnd;
-        }
-
-        let endTime = duration;
-        // Якщо тиша закінчується наприкінці файлу
-        if (silenceStart > 0 && (duration - silenceStart) < 1.5) {
-          endTime = silenceStart;
-        }
-
-        lbl.textContent = `ОБРІЗКА ТИШІ (${startTime.toFixed(1)}s - ${endTime.toFixed(1)}s)...`;
-        
-        // Швидка обрізка без перекодування потоків для синхронізації FPS
-        await ffmpeg.run('-ss', `${startTime}`, '-to', `${endTime}`, '-i', inputName, '-c:v', 'copy', '-c:a', 'aresample', processedName);
+        // Виправлено: правильний енкодер замість фільтру у параметрі -c:a, та виправлений таймінг
+        await ffmpeg.run(
+          '-i', inputName,
+          '-ss', `${bounds.startTime}`, 
+          '-to', `${bounds.endTime}`, 
+          '-c:v', 'copy', 
+          '-c:a', audioCodec, 
+          '-af', 'aresample=async=1', 
+          processedName
+        );
       } else {
-        // Якщо обрізка тиші вимкнена — просто переводимо в сумісний контейнер
         await ffmpeg.run('-i', inputName, '-c', 'copy', processedName);
       }
 
       concatListContent += `file '${processedName}'\n`;
     }
 
-    lbl.textContent = 'ЗШИВАННЯ ВСІХ ДУБЛІВ...';
-    fill.style.width = '75%';
+    lbl.textContent = 'ОДНОПРОХІДНА СКЛЕЙКА ВСІХ ФРАГМЕНТІВ...';
+    fill.style.width = '80%';
 
     ffmpeg.FS('writeFile', 'concat_list.txt', new TextEncoder().encode(concatListContent));
 
-    // Фінальний рендер: зшиваємо всі готові дублі
+    const outputName = `output.${ext}`;
     await ffmpeg.run(
       '-f', 'concat', 
       '-safe', '0', 
       '-i', 'concat_list.txt', 
       '-c:v', 'copy', 
       '-c:a', 'copy', 
-      'output.mp4'
+      outputName
     );
 
     fill.style.width = '100%';
-    lbl.textContent = 'ЗБЕРЕЖЕННЯ ГОТОВОГО ФАЙЛУ...';
+    lbl.textContent = 'ЗБЕРЕЖЕННЯ ВІДЕО...';
 
-    const data = ffmpeg.FS('readFile', 'output.mp4');
-    const outBlob = new Blob([data.buffer], { type: 'video/mp4' });
+    const data = ffmpeg.FS('readFile', outputName);
+    const outBlob = new Blob([data.buffer], { type: isMp4 ? 'video/mp4' : 'video/webm' });
     const url = URL.createObjectURL(outBlob);
 
     const a = document.createElement('a');
     a.href = url;
-    a.download = `TAKE_${Date.now()}.mp4`;
+    a.download = `TAKE_${Date.now()}.${ext}`;
     a.click();
 
-    // Очищення пам'яті FFmpeg
+    // Очищення пам'яті FS FFmpeg
     takes.forEach((_, i) => {
-      try { ffmpeg.FS('unlink', `input_${i}.webm`); } catch(e){}
-      try { ffmpeg.FS('unlink', `processed_${i}.mp4`); } catch(e){}
+      try { ffmpeg.FS('unlink', `input_${i}.${ext}`); } catch(e){}
+      try { ffmpeg.FS('unlink', `processed_${i}.${ext}`); } catch(e){}
     });
     try { ffmpeg.FS('unlink', 'concat_list.txt'); } catch(e){}
-    try { ffmpeg.FS('unlink', 'output.mp4'); } catch(e){}
+    try { ffmpeg.FS('unlink', outputName); } catch(e){}
 
     await dbClearAll();
     hideFreezeFrame();
     await updateUI();
 
-    setTimeout(() => pr.classList.remove('show'), 800);
+    setTimeout(() => pr.classList.remove('show'), 600);
 
   } catch (err) {
     console.error(err);
-    alert('Помилка під час монтажу відео. Деталі в консолі.');
+    alert('Помилка монтажу. Подробиці в консолі.');
     pr.classList.remove('show');
   }
 }
