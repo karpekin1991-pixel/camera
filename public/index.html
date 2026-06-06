@@ -272,11 +272,11 @@ function openDB() {
     req.onerror = () => reject(req.error);
   });
 }
-async function dbSaveTake(blob, mimeType) {
+async function dbSaveTake(blob, mimeType, duration) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).add({ blob, mimeType, timestamp: Date.now() });
+    tx.objectStore(STORE_NAME).add({ blob, mimeType, duration: duration || 0, timestamp: Date.now() });
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
   });
@@ -513,12 +513,14 @@ function startRecording() {
     catch(e2) { try { mediaRecorder = new MediaRecorder(stream); } catch(e3) { showStatus('ПОМИЛКА ЗАПИСУ'); return; } }
   }
   const recMime = mediaRecorder.mimeType || 'video/webm';
+  let takeStartTime = Date.now();
   mediaRecorder.ondataavailable = e => { if (e.data?.size > 0) currentChunks.push(e.data); };
   mediaRecorder.onerror = () => { isRecording=false; isStopping=false; stopTimer(); showStatus('ПОМИЛКА'); updateUI(); };
   mediaRecorder.onstop = async () => {
     isStopping = false;
     if (currentChunks.length > 0) {
-      await dbSaveTake(new Blob(currentChunks, {type:recMime}), recMime);
+      const duration = Date.now() - takeStartTime;
+      await dbSaveTake(new Blob(currentChunks, {type:recMime}), recMime, duration);
     }
     currentChunks = [];
     showFreezeFrame();
@@ -720,27 +722,40 @@ async function startRender() {
       inputNames.forEach(() => trimBounds.push(null));
     }
 
-    // Крок 3: вирізаємо кожен дубль по таймінгах
-    // Все у WebM, -c copy — без жодного перекодування, миттєво
+    // Крок 3: обробляємо кожен дубль
+    // Chrome MediaRecorder пише WebM з Duration:N/A і 1000fps у заголовку.
+    // Це викликає лаги при відтворенні. Виправляємо через remux з явним -r fps.
+    // Одночасно обрізаємо тишу якщо є.
     progLabel.textContent = 'ОБРОБКА ДУБЛІВ...';
 
     for (let i = 0; i < inputNames.length; i++) {
       const b = trimBounds[i];
       const outName = `proc_${i}.webm`;
+      const fps = String(S.fps);
 
       if (b) {
-        // -ss після -i для webm з Duration:N/A — точніший seek
-        addRenderLog(`[TRIM] ${inputNames[i]}: вирізаємо від ${b.start.toFixed(3)}с тривалість ${(b.end-b.start).toFixed(3)}с`);
+        addRenderLog(`[TRIM] ${inputNames[i]}: від ${b.start.toFixed(3)}с тривалість ${(b.end-b.start).toFixed(3)}с`);
+        // Remux з правильним fps + trim одним проходом
         await ffmpeg.run(
           '-i', inputNames[i],
           '-ss', b.start.toFixed(3),
           '-t', (b.end - b.start).toFixed(3),
-          '-c', 'copy',
+          '-c:v', 'copy',
+          '-c:a', 'copy',
+          '-r', fps,           // виправляємо 1000fps → реальний fps
+          '-vsync', 'cfr',     // constant frame rate — прибирає дубльовані кадри
           outName
         );
       } else {
-        addRenderLog(`[TRIM] ${inputNames[i]}: trim не потрібен, копіюємо`);
-        await ffmpeg.run('-i', inputNames[i], '-c', 'copy', outName);
+        addRenderLog(`[TRIM] ${inputNames[i]}: тільки remux з fps=${fps}`);
+        await ffmpeg.run(
+          '-i', inputNames[i],
+          '-c:v', 'copy',
+          '-c:a', 'copy',
+          '-r', fps,
+          '-vsync', 'cfr',
+          outName
+        );
       }
 
       processedNames.push(outName);
