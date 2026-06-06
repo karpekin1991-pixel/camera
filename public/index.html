@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="uk">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
@@ -10,26 +10,18 @@
   :root { --red:#ff2020; --white:#f0ede8; --black:#0a0a0a; --glass:rgba(240,237,232,0.08); --glass-border:rgba(240,237,232,0.15); }
   html,body { width:100%; height:100%; background:var(--black); color:var(--white); font-family:'JetBrains Mono',monospace; overflow:hidden; touch-action:manipulation; }
 
-  /* Камера всегда видна снизу */
   #camera-wrap { position:fixed; inset:0; background:#000; z-index:1; }
   #video { width:100%; height:100%; object-fit:cover; display:block; }
-  /* Зеркало только для фронтальной камеры — управляется JS через класс */
-  #video.mirrored { transform: scaleX(-1); }
+  #video.mirrored { transform:scaleX(-1); }
 
-  /* Замороженный кадр поверх камеры — полупрозрачный ч/б */
   #freeze-canvas {
     position:fixed; inset:0; width:100%; height:100%;
     object-fit:cover; display:none; z-index:2;
-    opacity:0.35;
-    filter: grayscale(100%);
+    opacity:0.35; filter:grayscale(100%);
   }
-
-  /* Цветной оверлей поверх замороженного кадра */
   #pause-overlay {
-    position:fixed; inset:0;
-    background:rgba(10,10,10,0.25);
-    opacity:0; pointer-events:none;
-    transition:opacity 0.25s ease; z-index:3;
+    position:fixed; inset:0; background:rgba(10,10,10,0.25);
+    opacity:0; pointer-events:none; transition:opacity 0.25s ease; z-index:3;
   }
   #pause-overlay.active { opacity:1; }
 
@@ -49,9 +41,12 @@
 
   #bottom-bar { position:fixed; bottom:0; left:0; right:0; padding:24px 24px 40px; display:flex; align-items:flex-end; justify-content:space-between; z-index:30; background:linear-gradient(to top,rgba(0,0,0,0.7) 0%,transparent 100%); }
 
-  #btn-delete { display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; opacity:0.85; transition:opacity 0.2s,transform 0.15s; -webkit-tap-highlight-color:transparent; user-select:none; min-width:56px; }
-  #btn-delete:active { transform:scale(0.92); }
-  #btn-delete.disabled { opacity:0.2; pointer-events:none; }
+  /* Ліва група: видалити + налаштування */
+  #left-btns { display:flex; flex-direction:column; align-items:center; gap:12px; }
+
+  .action-btn { display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; opacity:0.85; transition:opacity 0.2s,transform 0.15s; -webkit-tap-highlight-color:transparent; user-select:none; min-width:56px; }
+  .action-btn:active { transform:scale(0.92); }
+  .action-btn.disabled { opacity:0.2; pointer-events:none; }
 
   .btn-icon { width:44px; height:44px; border-radius:50%; background:var(--glass); border:1px solid var(--glass-border); display:flex; align-items:center; justify-content:center; backdrop-filter:blur(8px); }
   #btn-delete .btn-icon { background:rgba(255,32,32,0.12); border-color:rgba(255,32,32,0.3); }
@@ -68,33 +63,76 @@
   .record-inner { width:100%; height:100%; border-radius:50%; background:var(--white); transition:all 0.25s cubic-bezier(0.4,0,0.2,1); }
   #btn-record.recording .record-inner { background:var(--red); border-radius:16px; width:38px; height:38px; margin:17px; }
 
-  /* Правая группа кнопок: камера + монтаж */
+  /* Права група: камера + монтаж */
   #right-btns { display:flex; flex-direction:column; align-items:center; gap:12px; }
-
-  #btn-flip { display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; opacity:0.85; transition:opacity 0.2s,transform 0.15s; -webkit-tap-highlight-color:transparent; user-select:none; min-width:56px; }
-  #btn-flip:active { transform:scale(0.92); }
-
-  #btn-edit { display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; opacity:0.85; transition:opacity 0.2s,transform 0.15s; -webkit-tap-highlight-color:transparent; user-select:none; min-width:56px; }
-  #btn-edit:active { transform:scale(0.92); }
-  #btn-edit.disabled { opacity:0.2; pointer-events:none; }
 
   #status-msg { position:fixed; bottom:130px; left:50%; transform:translateX(-50%); font-size:11px; letter-spacing:2px; text-transform:uppercase; color:rgba(240,237,232,0.45); z-index:25; white-space:nowrap; }
   #delete-hint { position:fixed; bottom:130px; left:20px; font-size:9px; letter-spacing:1.5px; color:rgba(255,32,32,0.5); text-transform:uppercase; z-index:25; line-height:1.6; opacity:0; transition:opacity 0.4s; }
   #delete-hint.show { opacity:1; }
 
-  #modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.85); backdrop-filter:blur(12px); z-index:100; display:none; align-items:center; justify-content:center; padding:24px; }
-  #modal-overlay.show { display:flex; }
-  #modal { background:#111; border:1px solid rgba(240,237,232,0.1); border-radius:16px; padding:32px 24px; width:100%; max-width:420px; text-align:center; }
-  #modal h2 { font-family:'Bebas Neue',sans-serif; font-size:32px; letter-spacing:4px; margin-bottom:8px; }
-  #modal p { font-size:12px; color:rgba(240,237,232,0.5); letter-spacing:1px; margin-bottom:28px; line-height:1.6; }
-  #modal-takes { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-bottom:28px; }
+  /* ── МОДАЛ МОНТАЖ ── */
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.85); backdrop-filter:blur(12px); z-index:100; display:none; align-items:center; justify-content:center; padding:24px; }
+  .modal-overlay.show { display:flex; }
+  .modal-box { background:#111; border:1px solid rgba(240,237,232,0.1); border-radius:16px; padding:28px 24px; width:100%; max-width:440px; }
+  .modal-box h2 { font-family:'Bebas Neue',sans-serif; font-size:28px; letter-spacing:4px; margin-bottom:8px; text-align:center; }
+  .modal-box p.sub { font-size:11px; color:rgba(240,237,232,0.4); letter-spacing:1px; margin-bottom:24px; line-height:1.6; text-align:center; }
+  #modal-takes { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-bottom:24px; }
   .modal-take-chip { padding:6px 14px; border-radius:20px; background:var(--glass); border:1px solid var(--glass-border); font-size:11px; letter-spacing:1px; color:rgba(240,237,232,0.7); }
-  #modal-actions { display:flex; flex-direction:column; gap:10px; }
+  .modal-actions { display:flex; flex-direction:column; gap:10px; }
   .modal-btn { width:100%; padding:14px; border-radius:10px; border:none; cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:700; letter-spacing:2px; text-transform:uppercase; transition:transform 0.15s; }
   .modal-btn:active { transform:scale(0.97); }
   .modal-btn-primary { background:var(--white); color:var(--black); }
   .modal-btn-secondary { background:transparent; border:1px solid rgba(240,237,232,0.2); color:rgba(240,237,232,0.6); }
 
+  /* ── НАЛАШТУВАННЯ ── */
+  #settings-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.85); backdrop-filter:blur(12px); z-index:100; display:none; align-items:flex-end; justify-content:center; padding:0; }
+  #settings-overlay.show { display:flex; }
+  #settings-panel {
+    background:#111; border:1px solid rgba(240,237,232,0.1);
+    border-radius:20px 20px 0 0; padding:28px 24px 48px;
+    width:100%; max-width:480px;
+  }
+  #settings-panel h2 { font-family:'Bebas Neue',sans-serif; font-size:24px; letter-spacing:4px; margin-bottom:24px; text-align:center; }
+
+  .setting-row { margin-bottom:20px; }
+  .setting-label { font-size:10px; letter-spacing:2px; text-transform:uppercase; color:rgba(240,237,232,0.4); margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; }
+  .setting-label span { color:var(--white); font-size:12px; letter-spacing:1px; }
+
+  /* Перемикач якості */
+  .quality-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .quality-btn {
+    padding:10px 4px; border-radius:8px; border:1px solid rgba(240,237,232,0.15);
+    background:transparent; cursor:pointer; color:rgba(240,237,232,0.5);
+    font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:700;
+    letter-spacing:1px; text-align:center; transition:all 0.15s;
+  }
+  .quality-btn.active { background:var(--white); color:var(--black); border-color:var(--white); }
+  .quality-btn:active { transform:scale(0.95); }
+  .quality-sub { font-size:8px; display:block; margin-top:3px; opacity:0.6; font-weight:400; letter-spacing:0; }
+
+  /* Слайдер */
+  .slider-wrap { display:flex; align-items:center; gap:12px; }
+  input[type=range] {
+    flex:1; -webkit-appearance:none; height:3px;
+    background:rgba(240,237,232,0.2); border-radius:2px; outline:none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance:none; width:20px; height:20px; border-radius:50%;
+    background:var(--white); cursor:pointer;
+  }
+  .slider-val { font-size:11px; font-weight:700; color:var(--white); min-width:36px; text-align:right; }
+
+  /* Тогл */
+  .toggle-row { display:flex; align-items:center; justify-content:space-between; padding:4px 0; }
+  .toggle-label { font-size:11px; color:rgba(240,237,232,0.7); letter-spacing:1px; }
+  .toggle { width:44px; height:24px; border-radius:12px; background:rgba(240,237,232,0.15); position:relative; cursor:pointer; transition:background 0.2s; }
+  .toggle.on { background:var(--white); }
+  .toggle::after { content:''; position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:rgba(50,50,50,0.8); transition:transform 0.2s; }
+  .toggle.on::after { transform:translateX(20px); background:var(--black); }
+
+  .settings-close { width:100%; margin-top:20px; padding:14px; border-radius:10px; border:1px solid rgba(240,237,232,0.2); background:transparent; color:rgba(240,237,232,0.6); font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:700; letter-spacing:2px; text-transform:uppercase; cursor:pointer; }
+
+  /* ── ПРОГРЕС РЕНДЕРУ ── */
   #render-progress { position:fixed; inset:0; background:var(--black); z-index:200; display:none; flex-direction:column; align-items:center; justify-content:center; gap:24px; padding:32px; }
   #render-progress.show { display:flex; }
   #render-progress h2 { font-family:'Bebas Neue',sans-serif; font-size:28px; letter-spacing:6px; }
@@ -112,7 +150,6 @@
 <body>
 
 <div id="camera-wrap"><video id="video" autoplay muted playsinline></video></div>
-<!-- Замороженный кадр — полупрозрачный, камера видна сквозь него -->
 <canvas id="freeze-canvas"></canvas>
 <div id="pause-overlay"></div>
 
@@ -120,118 +157,206 @@
 <div id="take-counter">ДУБЛЬ 1</div>
 <div id="timer">00:00</div>
 <div id="takes-list"></div>
-<div id="status-msg">НАЖМИТЕ ДЛЯ ЗАПИСИ</div>
-<div id="delete-hint">2× — УДАЛИТЬ 2 ДУБЛЯ</div>
+<div id="status-msg">НАТИСНІТЬ ДЛЯ ЗАПИСУ</div>
+<div id="delete-hint">2× — ВИДАЛИТИ 2 ДУБЛІ</div>
 
 <div id="bottom-bar">
-  <!-- Удалить -->
-  <div id="btn-delete" class="disabled" onclick="handleDelete()">
-    <div class="icon-wrap">
-      <div class="btn-icon">
-        <div id="delete-count-badge">2</div>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6M14 11v6"></path><path d="M9 6V4h6v2"></path></svg>
+
+  <!-- ЛІВА ГРУПА: видалити + налаштування -->
+  <div id="left-btns">
+    <div id="btn-delete" class="action-btn disabled" onclick="handleDelete()">
+      <div class="icon-wrap">
+        <div class="btn-icon">
+          <div id="delete-count-badge">2</div>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+        </div>
       </div>
+      <span class="btn-label">ВИДАЛИТИ<br>ДУБЛЬ</span>
     </div>
-    <span class="btn-label">УДАЛИТЬ<br>ДУБЛЬ</span>
+
+    <div id="btn-settings" class="action-btn" onclick="openSettings()">
+      <div class="btn-icon">
+        <!-- Іконка налаштувань — шестерня -->
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </div>
+      <span class="btn-label">НАСТРОЙКИ</span>
+    </div>
   </div>
 
-  <!-- Запись -->
+  <!-- ГОЛОВНА КНОПКА ЗАПИСУ -->
   <div id="btn-record" onclick="handleRecord()">
     <div class="record-ring"></div>
     <div class="record-inner"></div>
   </div>
 
-  <!-- Правая группа: переключить камеру + монтаж -->
+  <!-- ПРАВА ГРУПА: перевернути камеру + монтаж -->
   <div id="right-btns">
-    <div id="btn-flip" onclick="flipCamera()">
+    <div id="btn-flip" class="action-btn" onclick="flipCamera()">
       <div class="btn-icon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>
+        <!-- Іконка перевороту камери — зігнута стрілка -->
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
       </div>
       <span class="btn-label">КАМЕРА</span>
     </div>
 
-    <div id="btn-edit" class="disabled" onclick="openModal()">
+    <div id="btn-edit" class="action-btn disabled" onclick="openModal()">
       <div class="btn-icon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
       </div>
       <span class="btn-label">МОНТАЖ</span>
     </div>
   </div>
+
 </div>
 
-<div id="modal-overlay">
-  <div id="modal">
+<!-- МОДАЛ МОНТАЖ -->
+<div id="modal-overlay" class="modal-overlay">
+  <div class="modal-box">
     <h2>МОНТАЖ</h2>
-    <p id="modal-desc"></p>
+    <p class="sub" id="modal-desc"></p>
     <div id="modal-takes"></div>
-    <div id="modal-actions">
-      <button class="modal-btn modal-btn-primary" onclick="startRender()">СКЛЕИТЬ В ОДНО ВИДЕО</button>
-      <button class="modal-btn modal-btn-secondary" onclick="closeModal()">ПРОДОЛЖИТЬ СЪЁМКУ</button>
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn-primary" onclick="startRender()">СКЛЕЇТИ В ОДНЕ ВІДЕО</button>
+      <button class="modal-btn modal-btn-secondary" onclick="closeModal()">ПРОДОВЖИТИ ЗЙОМКУ</button>
     </div>
   </div>
 </div>
 
+<!-- НАЛАШТУВАННЯ -->
+<div id="settings-overlay">
+  <div id="settings-panel">
+    <h2>НАЛАШТУВАННЯ</h2>
+
+    <!-- Якість відео -->
+    <div class="setting-row">
+      <div class="setting-label">ЯКІСТЬ ВІДЕО <span id="quality-label">ВИСОКА · 8 Mbps</span></div>
+      <div class="quality-grid">
+        <button class="quality-btn" data-mbps="2" onclick="setQuality(this)">
+          НИЗЬКА<span class="quality-sub">2 Mbps</span>
+        </button>
+        <button class="quality-btn" data-mbps="4" onclick="setQuality(this)">
+          СЕРЕДНЯ<span class="quality-sub">4 Mbps</span>
+        </button>
+        <button class="quality-btn active" data-mbps="8" onclick="setQuality(this)">
+          ВИСОКА<span class="quality-sub">8 Mbps</span>
+        </button>
+        <button class="quality-btn" data-mbps="16" onclick="setQuality(this)">
+          МАКС<span class="quality-sub">16 Mbps</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Аудіо бітрейт -->
+    <div class="setting-row">
+      <div class="setting-label">АУДІО БІТРЕЙТ <span id="audio-label">128 kbps</span></div>
+      <div class="slider-wrap">
+        <span style="font-size:10px;opacity:0.4">64</span>
+        <input type="range" id="audio-slider" min="64" max="320" step="64" value="128" oninput="setAudio(this)">
+        <span style="font-size:10px;opacity:0.4">320</span>
+      </div>
+    </div>
+
+    <!-- Прозорість замороженого кадру -->
+    <div class="setting-row">
+      <div class="setting-label">ПРОЗОРІСТЬ КАДРУ <span id="opacity-label">35%</span></div>
+      <div class="slider-wrap">
+        <span style="font-size:10px;opacity:0.4">10%</span>
+        <input type="range" id="opacity-slider" min="10" max="70" step="5" value="35" oninput="setOpacity(this)">
+        <span style="font-size:10px;opacity:0.4">70%</span>
+      </div>
+    </div>
+
+    <!-- Дзеркало для задньої камери -->
+    <div class="setting-row">
+      <div class="toggle-row">
+        <span class="toggle-label">ДЗЕРКАЛО ЗАДНЬОЇ КАМЕРИ</span>
+        <div id="toggle-mirror-back" class="toggle" onclick="toggleMirrorBack()"></div>
+      </div>
+      <div class="toggle-row" style="margin-top:10px">
+        <span class="toggle-label">ДЗЕРКАЛО ФРОНТАЛЬНОЇ КАМЕРИ</span>
+        <div id="toggle-mirror-front" class="toggle on" onclick="toggleMirrorFront()"></div>
+      </div>
+    </div>
+
+    <!-- Пам'ять -->
+    <div class="setting-row">
+      <div class="setting-label">ВИКОРИСТАННЯ ПАМ'ЯТІ <span id="mem-label">0 MB</span></div>
+      <div style="font-size:10px;color:rgba(240,237,232,0.3);letter-spacing:1px;line-height:1.8">
+        Всі дублі зберігаються в RAM до скачування.<br>
+        При <span id="mem-mbps">8</span> Mbps ≈ <span id="mem-per-min">60</span> MB/хв
+      </div>
+    </div>
+
+    <button class="settings-close" onclick="closeSettings()">ЗАКРИТИ</button>
+  </div>
+</div>
+
+<!-- ПРОГРЕС РЕНДЕРУ -->
 <div id="render-progress">
   <h2>МОНТАЖ...</h2>
   <div class="progress-bar-wrap"><div id="progress-fill"></div></div>
-  <div id="render-label">ПОДГОТОВКА</div>
+  <div id="render-label">ПІДГОТОВКА</div>
 </div>
 
 <div id="no-camera">
-  <h2>НЕТ КАМЕРЫ</h2>
-  <p>Разрешите доступ к камере<br>и микрофону в браузере</p>
+  <h2>НЕТ КАМЕРИ</h2>
+  <p>Дозвольте доступ до камери<br>та мікрофону в браузері</p>
 </div>
 
 <script src="/ffmpeg/ffmpeg.min.js"></script>
 <script>
+// ── СТАН ──
 let stream = null, mediaRecorder = null;
-let takes = [];
-let currentChunks = [];
-let isRecording = false;
+let takes = [], currentChunks = [];
+let isRecording = false, isStopping = false;
 let timerInterval = null, timerStart = 0;
 let deleteClickTimeout = null, deleteClickCount = 0;
-let facingMode = 'environment'; // задняя камера по умолчанию
-let ffmpegInstance = null; // пересоздаём каждый раз
+let facingMode = 'environment';
+let sessionMimeType = null;
 
-// ── ИНИЦИАЛИЗАЦИЯ ──
-async function init() {
-  await startCamera(facingMode);
-}
+// Налаштування
+let settings = {
+  videoBitrate: 8_000_000,   // 8 Mbps
+  audioBitrate: 128_000,     // 128 kbps
+  freezeOpacity: 0.35,
+  mirrorBack: false,
+  mirrorFront: true,
+};
+
+// ── КАМЕРА ──
+async function init() { await startCamera(facingMode); }
 
 async function startCamera(facing) {
-  if (stream) {
-    stream.getTracks().forEach(t => t.stop());
-    stream = null;
-  }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: facing, width:{ideal:1920}, height:{ideal:1080} },
       audio: true
     });
   } catch(e) {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
-    } catch(e2) {
-      document.getElementById('no-camera').classList.add('show');
-      return;
-    }
+    try { stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:true }); }
+    catch(e2) { document.getElementById('no-camera').classList.add('show'); return; }
   }
   const video = document.getElementById('video');
   video.srcObject = stream;
-  // Дзеркало тільки для фронтальної камери
-  video.classList.toggle('mirrored', facing === 'user');
+  applyMirror();
   updateUI();
 }
 
-// ── ПЕРЕКЛЮЧЕНИЕ КАМЕРЫ ──
+function applyMirror() {
+  const video = document.getElementById('video');
+  const shouldMirror = (facingMode === 'user' && settings.mirrorFront) ||
+                       (facingMode === 'environment' && settings.mirrorBack);
+  video.classList.toggle('mirrored', shouldMirror);
+}
+
 async function flipCamera() {
-  if (isRecording) return; // не переключаем во время записи
+  if (isRecording) return;
   facingMode = facingMode === 'environment' ? 'user' : 'environment';
   await startCamera(facingMode);
 }
 
-// Фіксований mimeType на всю сесію — визначається один раз
-let sessionMimeType = null;
+// ── ЗАПИС ──
 function getSessionMimeType() {
   if (sessionMimeType) return sessionMimeType;
   const types = ['video/webm;codecs=vp8,opus','video/webm;codecs=vp9,opus','video/webm','video/mp4;codecs=h264,aac','video/mp4'];
@@ -239,9 +364,8 @@ function getSessionMimeType() {
   return sessionMimeType;
 }
 
-// ── ЗАПИС ──
 function handleRecord() {
-  if (!stream) return;
+  if (!stream || isStopping) return;
   if (isRecording) stopRecording(); else startRecording();
 }
 
@@ -250,7 +374,6 @@ function startRecording() {
   currentChunks = [];
   mediaRecorder = null;
 
-  // Перевіряємо що треки живі
   const activeTracks = stream.getTracks().filter(t => t.readyState === 'live');
   if (activeTracks.length === 0) {
     startCamera(facingMode).then(() => setTimeout(startRecording, 300));
@@ -258,37 +381,36 @@ function startRecording() {
   }
 
   const mime = getSessionMimeType();
-  try {
-    mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
-  } catch(e) {
-    try { mediaRecorder = new MediaRecorder(stream); }
-    catch(e2) { showStatus('ПОМИЛКА ЗАПИСУ'); return; }
+  const recOptions = {};
+  if (mime) recOptions.mimeType = mime;
+  recOptions.videoBitsPerSecond = settings.videoBitrate;
+  recOptions.audioBitsPerSecond = settings.audioBitrate;
+
+  try { mediaRecorder = new MediaRecorder(stream, recOptions); }
+  catch(e) {
+    try { mediaRecorder = new MediaRecorder(stream, mime ? {mimeType:mime} : {}); }
+    catch(e2) { try { mediaRecorder = new MediaRecorder(stream); } catch(e3) { showStatus('ПОМИЛКА ЗАПИСУ'); return; } }
   }
 
   const recordMime = mediaRecorder.mimeType || 'video/webm';
 
-  mediaRecorder.ondataavailable = e => {
-    if (e.data && e.data.size > 0) currentChunks.push(e.data);
-  };
-
+  mediaRecorder.ondataavailable = e => { if (e.data && e.data.size > 0) currentChunks.push(e.data); };
   mediaRecorder.onerror = e => {
     console.error('MediaRecorder error:', e);
-    isRecording = false;
-    stopTimer();
-    showStatus('ПОМИЛКА — СПРОБУЙТЕ ЩЕ РАЗ');
-    updateUI();
+    isRecording = false; isStopping = false;
+    stopTimer(); showStatus('ПОМИЛКА — СПРОБУЙТЕ ЩЕ РАЗ'); updateUI();
   };
-
   mediaRecorder.onstop = () => {
-    if (currentChunks.length > 0) {
-      takes.push({ blob: new Blob(currentChunks, { type: recordMime }), duration: Date.now() - timerStart, mimeType: recordMime });
-    }
+    isStopping = false;
+    if (currentChunks.length > 0)
+      takes.push({ blob: new Blob(currentChunks, {type:recordMime}), duration: Date.now()-timerStart, mimeType:recordMime });
     currentChunks = [];
     showFreezeFrame();
     updateUI();
+    updateMemLabel();
   };
 
-  mediaRecorder.start(200);
+  mediaRecorder.start(10);
   isRecording = true;
   timerStart = Date.now();
   startTimer();
@@ -297,6 +419,7 @@ function startRecording() {
 
 function stopRecording() {
   if (mediaRecorder && mediaRecorder.state === 'recording') {
+    isStopping = true;
     mediaRecorder.requestData();
     mediaRecorder.stop();
   }
@@ -304,14 +427,14 @@ function stopRecording() {
   stopTimer();
 }
 
-// ── ЗАМОРОЖЕННЫЙ КАДР ──
-// Рисуем последний кадр на canvas с opacity 0.55 — сквозь него видна живая камера
+// ── ЗАМОРОЖЕНИЙ КАДР ──
 function showFreezeFrame() {
   const video = document.getElementById('video');
   const canvas = document.getElementById('freeze-canvas');
   canvas.width = video.videoWidth || window.innerWidth;
   canvas.height = video.videoHeight || window.innerHeight;
   canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  canvas.style.opacity = settings.freezeOpacity;
   canvas.style.display = 'block';
   document.getElementById('pause-overlay').classList.add('active');
 }
@@ -321,22 +444,14 @@ function hideFreezeFrame() {
 }
 
 // ── ТАЙМЕР ──
-function startTimer() {
-  clearInterval(timerInterval);
-  timerInterval = setInterval(updateTimer, 500);
-  updateTimer();
-}
-function stopTimer() {
-  clearInterval(timerInterval);
-  document.getElementById('timer').textContent = '00:00';
-}
+function startTimer() { clearInterval(timerInterval); timerInterval = setInterval(updateTimer, 500); updateTimer(); }
+function stopTimer() { clearInterval(timerInterval); document.getElementById('timer').textContent = '00:00'; }
 function updateTimer() {
-  const s = Math.floor((Date.now() - timerStart) / 1000);
-  document.getElementById('timer').textContent =
-    String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
+  const s = Math.floor((Date.now()-timerStart)/1000);
+  document.getElementById('timer').textContent = String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
 }
 
-// ── УДАЛЕНИЕ ──
+// ── ВИДАЛЕННЯ ──
 function handleDelete() {
   if (isRecording || takes.length === 0) return;
   deleteClickCount++;
@@ -344,123 +459,128 @@ function handleDelete() {
   if (deleteClickCount === 1) {
     if (takes.length >= 2) document.getElementById('delete-hint').classList.add('show');
     deleteClickTimeout = setTimeout(() => {
-      if (deleteClickCount === 1) {
-        takes.pop();
-        if (takes.length > 0) showFreezeFrame(); else hideFreezeFrame();
-        updateUI(); showStatus('ДУБЛЬ УДАЛЁН');
-      }
+      if (deleteClickCount === 1) { takes.pop(); if (takes.length > 0) showFreezeFrame(); else hideFreezeFrame(); updateUI(); updateMemLabel(); showStatus('ДУБЛЬ ВИДАЛЕНО'); }
       deleteClickCount = 0;
       document.getElementById('delete-hint').classList.remove('show');
     }, 400);
   } else if (deleteClickCount >= 2) {
-    clearTimeout(deleteClickTimeout);
-    deleteClickCount = 0;
+    clearTimeout(deleteClickTimeout); deleteClickCount = 0;
     document.getElementById('delete-hint').classList.remove('show');
     const n = Math.min(2, takes.length);
     takes.splice(-n);
     if (takes.length > 0) showFreezeFrame(); else hideFreezeFrame();
-    updateUI(); showStatus(`УДАЛЕНО ${n} ДУБЛЯ`);
+    updateUI(); updateMemLabel(); showStatus(`ВИДАЛЕНО ${n} ДУБЛІ`);
   }
 }
 
-// ── МОДАЛ ──
+// ── МОНТАЖ МОДАЛ ──
 function openModal() {
   if (isRecording) stopRecording();
-  document.getElementById('modal-desc').textContent =
-    `${takes.length} ${pluralTake(takes.length)} будуть склеєні в одне відео`;
+  document.getElementById('modal-desc').textContent = `${takes.length} ${pluralTake(takes.length)} будуть склеєні в одне відео`;
   document.getElementById('modal-takes').innerHTML = takes.map((t,i) =>
-    `<div class="modal-take-chip">ДУБЛЬ ${i+1} · ${Math.floor(t.duration/1000)}с</div>`
-  ).join('');
+    `<div class="modal-take-chip">ДУБЛЬ ${i+1} · ${Math.floor(t.duration/1000)}с</div>`).join('');
   document.getElementById('modal-overlay').classList.add('show');
 }
 function closeModal() { document.getElementById('modal-overlay').classList.remove('show'); }
 function pluralTake(n) { return n===1?'дубль':n<=4?'дублі':'дублів'; }
 
-// ── РЕНДЕР ЧЕРЕЗ FFMPEG.WASM ──
-// Кожен раз створюємо новий екземпляр — виключає помилку "FFmpeg was not ready"
+// ── НАЛАШТУВАННЯ ──
+function openSettings() {
+  updateMemLabel();
+  document.getElementById('settings-overlay').classList.add('show');
+}
+function closeSettings() { document.getElementById('settings-overlay').classList.remove('show'); }
+
+function setQuality(btn) {
+  document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const mbps = parseInt(btn.dataset.mbps);
+  settings.videoBitrate = mbps * 1_000_000;
+  sessionMimeType = null; // скидаємо щоб перевибрати кодек
+  document.getElementById('quality-label').textContent = `${btn.textContent.trim().split('\n')[0]} · ${mbps} Mbps`;
+  document.getElementById('mem-mbps').textContent = mbps;
+  document.getElementById('mem-per-min').textContent = Math.round(mbps * 60 / 8);
+  updateMemLabel();
+}
+
+function setAudio(input) {
+  settings.audioBitrate = parseInt(input.value) * 1000;
+  document.getElementById('audio-label').textContent = `${input.value} kbps`;
+}
+
+function setOpacity(input) {
+  settings.freezeOpacity = parseInt(input.value) / 100;
+  document.getElementById('opacity-label').textContent = `${input.value}%`;
+  document.getElementById('freeze-canvas').style.opacity = settings.freezeOpacity;
+}
+
+function toggleMirrorBack() {
+  settings.mirrorBack = !settings.mirrorBack;
+  document.getElementById('toggle-mirror-back').classList.toggle('on', settings.mirrorBack);
+  if (facingMode === 'environment') applyMirror();
+}
+function toggleMirrorFront() {
+  settings.mirrorFront = !settings.mirrorFront;
+  document.getElementById('toggle-mirror-front').classList.toggle('on', settings.mirrorFront);
+  if (facingMode === 'user') applyMirror();
+}
+
+function updateMemLabel() {
+  const totalBytes = takes.reduce((sum, t) => sum + t.blob.size, 0);
+  const mb = (totalBytes / 1_000_000).toFixed(1);
+  document.getElementById('mem-label').textContent = `${mb} MB`;
+}
+
+// ── РЕНДЕР ──
 async function startRender() {
   closeModal();
   if (!takes.length) return;
-
   const progress = document.getElementById('render-progress');
   const fill = document.getElementById('progress-fill');
   const label = document.getElementById('render-label');
   progress.classList.add('show');
   fill.style.width = '0%';
-
   try {
-    label.textContent = 'ЗАВАНТАЖЕННЯ FFMPEG...';
-    fill.style.width = '5%';
-
-    // Завжди створюємо новий екземпляр
+    label.textContent = 'ЗАВАНТАЖЕННЯ FFMPEG...'; fill.style.width = '5%';
     const { createFFmpeg, fetchFile } = FFmpeg;
     const ffmpeg = createFFmpeg({
-      corePath: '/ffmpeg/ffmpeg-core.js',
-      log: false,
+      corePath: '/ffmpeg/ffmpeg-core.js', log: false,
       progress: ({ ratio }) => {
-        if (ratio > 0) {
-          fill.style.width = `${50 + ratio * 44}%`;
-          label.textContent = `РЕНДЕР ${Math.round(ratio * 100)}%`;
-        }
+        if (ratio > 0) { fill.style.width = `${50+ratio*44}%`; label.textContent = `РЕНДЕР ${Math.round(ratio*100)}%`; }
       }
     });
-
     await ffmpeg.load();
-    fill.style.width = '15%';
-    label.textContent = 'ЗАПИС ФАЙЛІВ...';
-
+    fill.style.width = '15%'; label.textContent = 'ЗАПИС ФАЙЛІВ...';
     const ext = takes[0].mimeType.includes('mp4') ? 'mp4' : 'webm';
     const fileList = [];
-
     for (let i = 0; i < takes.length; i++) {
       const name = `take${i}.${ext}`;
       ffmpeg.FS('writeFile', name, await fetchFile(takes[i].blob));
       fileList.push(`file '${name}'`);
-      fill.style.width = `${15 + (i+1)/takes.length * 30}%`;
+      fill.style.width = `${15+(i+1)/takes.length*30}%`;
       label.textContent = `ДУБЛЬ ${i+1} з ${takes.length} ЗАВАНТАЖЕНО`;
     }
-
     ffmpeg.FS('writeFile', 'list.txt', new TextEncoder().encode(fileList.join('\n')));
-
-    fill.style.width = '50%';
-    label.textContent = 'СКЛЕЙКА ДУБЛІВ...';
-
+    fill.style.width = '50%'; label.textContent = 'СКЛЕЙКА ДУБЛІВ...';
     await ffmpeg.run('-f','concat','-safe','0','-i','list.txt','-c','copy',`output.${ext}`);
-
-    fill.style.width = '97%';
-    label.textContent = 'ЗБЕРЕЖЕННЯ...';
-
+    fill.style.width = '97%'; label.textContent = 'ЗБЕРЕЖЕННЯ...';
     const data = ffmpeg.FS('readFile', `output.${ext}`);
-    const blob = new Blob([data.buffer], { type: takes[0].mimeType });
-
-    fill.style.width = '100%';
-    label.textContent = 'ГОТОВО!';
+    const blob = new Blob([data.buffer], {type: takes[0].mimeType});
+    fill.style.width = '100%'; label.textContent = 'ГОТОВО!';
     await new Promise(r => setTimeout(r, 400));
-
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `final_${Date.now()}.${ext}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    a.href = url; a.download = `final_${Date.now()}.${ext}`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-
-    // Очищаємо FS
     for (let i = 0; i < takes.length; i++) { try { ffmpeg.FS('unlink', `take${i}.${ext}`); } catch(e){} }
-    try { ffmpeg.FS('unlink', 'list.txt'); } catch(e){}
-    try { ffmpeg.FS('unlink', `output.${ext}`); } catch(e){}
-
+    try { ffmpeg.FS('unlink','list.txt'); } catch(e){}
+    try { ffmpeg.FS('unlink',`output.${ext}`); } catch(e){}
     progress.classList.remove('show');
-    takes = [];
-    hideFreezeFrame();
-    updateUI();
-    showStatus('СКАЧАНО!');
-
+    takes = []; hideFreezeFrame(); updateUI(); updateMemLabel(); showStatus('СКАЧАНО!');
   } catch(e) {
     console.error(e);
-    label.textContent = 'ПОМИЛКА: ' + e.message;
-    fill.style.width = '100%';
+    label.textContent = 'ПОМИЛКА: '+e.message;
     setTimeout(() => progress.classList.remove('show'), 4000);
   }
 }
@@ -481,55 +601,39 @@ function updateStatusText() {
 
 // ── UI ──
 function updateUI() {
-  const btnRecord = document.getElementById('btn-record');
-  const recBadge = document.getElementById('rec-badge');
-  const deleteBadge = document.getElementById('delete-count-badge');
-
-  btnRecord.classList[isRecording ? 'add' : 'remove']('recording');
-  recBadge.classList[isRecording ? 'add' : 'remove']('visible');
-
-  document.getElementById('take-counter').textContent =
-    isRecording ? `ДУБЛЬ ${takes.length + 1}` : `ДУБЛЬ ${takes.length + 1}`;
-
-  const canDelete = takes.length > 0 && !isRecording;
-  document.getElementById('btn-delete').classList[canDelete ? 'remove' : 'add']('disabled');
-  if (takes.length >= 2) { deleteBadge.textContent='2'; deleteBadge.classList.add('show'); }
-  else deleteBadge.classList.remove('show');
-
-  document.getElementById('btn-edit').classList[takes.length >= 1 && !isRecording ? 'remove' : 'add']('disabled');
-
+  document.getElementById('btn-record').classList[isRecording?'add':'remove']('recording');
+  document.getElementById('rec-badge').classList[isRecording?'add':'remove']('visible');
+  document.getElementById('take-counter').textContent = `ДУБЛЬ ${takes.length+1}`;
+  const canDel = takes.length > 0 && !isRecording;
+  document.getElementById('btn-delete').classList[canDel?'remove':'add']('disabled');
+  const badge = document.getElementById('delete-count-badge');
+  if (takes.length >= 2) { badge.textContent='2'; badge.classList.add('show'); } else badge.classList.remove('show');
+  document.getElementById('btn-edit').classList[takes.length>=1&&!isRecording?'remove':'add']('disabled');
   document.getElementById('takes-list').innerHTML =
-    Array.from({length: Math.min(takes.length + 3, 14)}, (_,i) => {
-      let cls = 'take-pip';
-      if (i < takes.length) cls += ' done';
-      else if (i === takes.length && isRecording) cls += ' recording';
+    Array.from({length:Math.min(takes.length+3,14)},(_,i)=>{
+      let cls='take-pip';
+      if(i<takes.length) cls+=' done';
+      else if(i===takes.length&&isRecording) cls+=' recording';
       return `<div class="${cls}"></div>`;
     }).join('');
-
   updateStatusText();
 }
 
 // ── BLUETOOTH / КЛАВІАТУРА ──
 const TRIGGER_KEYS = new Set([' ','Enter','ArrowUp','ArrowDown','MediaPlayPause','MediaPlay','MediaPause','VolumeUp','VolumeDown','F5','F8','PageUp','PageDown']);
-document.addEventListener('keydown', e => {
-  if (TRIGGER_KEYS.has(e.key)) { e.preventDefault(); handleRecord(); }
-});
+document.addEventListener('keydown', e => { if (TRIGGER_KEYS.has(e.key)) { e.preventDefault(); handleRecord(); } });
+let gamepadPolling = false;
 window.addEventListener('gamepadconnected', () => {
   if (gamepadPolling) return; gamepadPolling = true;
   let prev = {};
   (function poll() {
     for (const gp of navigator.getGamepads()) {
       if (!gp) continue;
-      gp.buttons.forEach((btn,i) => {
-        const k = gp.index+'_'+i;
-        if (btn.pressed && !prev[k]) handleRecord();
-        prev[k] = btn.pressed;
-      });
+      gp.buttons.forEach((btn,i) => { const k=gp.index+'_'+i; if(btn.pressed&&!prev[k]) handleRecord(); prev[k]=btn.pressed; });
     }
     requestAnimationFrame(poll);
   })();
 });
-let gamepadPolling = false;
 
 init();
 </script>
