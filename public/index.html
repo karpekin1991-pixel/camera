@@ -578,26 +578,18 @@ async function _openModal() {
 // Виправлено: прибрано помилковий .remove('remove')
 function closeModal() { document.getElementById('modal-overlay').classList.remove('show'); }
 
-// ── АНАЛІЗ ТИШІ через ffmpeg (швидко, мало RAM) ──
-// Витягуємо тільки аудіо в WAV 16kHz mono через ffmpeg — набагато швидше
-// ніж Web Audio API декодування повного blob
+// ── АНАЛІЗ ТИШІ через ffmpeg (16kHz mono WAV) ──
 async function analyzeAudioBoundsFFmpeg(ffmpeg, inName) {
-  const wavName = inName.replace('.webm', '_a.wav');
+  const wavName = inName + '_a.wav';
   try {
-    // Витягуємо тільки аудіо: mono, 16kHz, PCM — мінімум даних для аналізу
     await ffmpeg.run(
       '-i', inName,
-      '-vn',           // без відео
-      '-ar', '16000',  // 16kHz достатньо для детекції пауз
-      '-ac', '1',      // mono
-      '-c:a', 'pcm_s16le',
+      '-vn', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
       wavName
     );
-
     const wavData = ffmpeg.FS('readFile', wavName);
     try { ffmpeg.FS('unlink', wavName); } catch(e) {}
 
-    // Декодуємо WAV через Web Audio — тепер це маленький файл (16kHz mono)
     const aCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
     let decoded;
     try { decoded = await aCtx.decodeAudioData(wavData.buffer); }
@@ -619,12 +611,18 @@ async function analyzeAudioBoundsFFmpeg(ffmpeg, inName) {
     if (start < 0.15 && (total - end) < 0.15) return null;
     return { start, end };
   } catch(e) {
-    console.warn('Audio analysis failed:', e);
+    console.warn('Audio analysis failed for', inName, e);
     return null;
   }
 }
 
-// ── РЕНДЕР — один прохід ffmpeg, оптимізована пам'ять ──
+// ── РЕНДЕР ──
+// Логіка:
+// 1. Завантажуємо дублі у ffmpeg FS
+// 2. Аналізуємо аудіо кожного дубля (16kHz WAV — швидко)
+// 3. Вирізаємо потрібні відрізки: відео копіюємо (-c:v copy), аудіо перекодуємо в aac
+//    Це в 10-20 разів швидше ніж libx264
+// 4. Склеюємо через concat demuxer з -c copy — миттєво
 async function startRender() {
   closeModal();
   const progWindow = document.getElementById('render-progress');
@@ -645,98 +643,109 @@ async function startRender() {
   }
 
   const inputNames = [];
+  const processedNames = [];
 
   try {
-    // Крок 1: завантажуємо всі дублі у ffmpeg FS
+    // Крок 1: завантажуємо дублі у ffmpeg FS
     progLabel.textContent = 'ЗАВАНТАЖЕННЯ ДУБЛІВ...';
     for (let i = 0; i < takesList.length; i++) {
       const name = `in_${i}.webm`;
       ffmpeg.FS('writeFile', name, new Uint8Array(await takesList[i].blob.arrayBuffer()));
       inputNames.push(name);
-      progFill.style.width = `${Math.round((i+1)/takesList.length*20)}%`;
+      progFill.style.width = `${Math.round((i+1)/takesList.length*25)}%`;
     }
 
-    // Крок 2: аналіз тиші через ffmpeg (якщо увімкнено)
-    // Аналізуємо вже після завантаження — ffmpeg читає з FS, не з RAM
+    // Крок 2: аналіз аудіо (якщо увімкнено trim)
     const trimBounds = [];
     if (S.trimSilence) {
       for (let i = 0; i < inputNames.length; i++) {
         progLabel.textContent = `АНАЛІЗ ТИШІ ${i+1}/${inputNames.length}...`;
-        progFill.style.width = `${20 + Math.round((i+1)/inputNames.length*20)}%`;
+        progFill.style.width = `${25 + Math.round((i+1)/inputNames.length*25)}%`;
         trimBounds.push(await analyzeAudioBoundsFFmpeg(ffmpeg, inputNames[i]));
       }
     } else {
       inputNames.forEach(() => trimBounds.push(null));
     }
 
-    // Крок 3: один прохід ffmpeg — trim + concat + encode
-    // Ідея з тієї програми: filter_complex будує всі сегменти за один запуск
-    progLabel.textContent = 'КОДУВАННЯ MP4...';
-    progFill.style.width = '42%';
+    // Крок 3: вирізаємо кожен дубль по таймінгах
+    // -c:v copy — відео не перекодуємо (миттєво)
+    // -c:a aac  — тільки аудіо перекодуємо (дуже швидко)
+    progLabel.textContent = 'ОБРОБКА ДУБЛІВ...';
+    const hasTrim = trimBounds.some(b => b !== null);
 
-    ffmpeg.setProgress(({ ratio }) => {
-      if (ratio > 0) {
-        progFill.style.width = `${42 + Math.round(ratio * 52)}%`;
-        progLabel.textContent = `РЕНДЕР ${Math.round(ratio * 100)}%`;
-      }
-    });
-
-    const filterParts = [];
-    for (let i = 0; i < takesList.length; i++) {
+    for (let i = 0; i < inputNames.length; i++) {
       const b = trimBounds[i];
+      const outName = `proc_${i}.mp4`;
+
       if (b) {
-        const ss = b.start.toFixed(3);
-        const ee = b.end.toFixed(3);
-        filterParts.push(`[${i}:v]trim=${ss}:${ee},setpts=PTS-STARTPTS[v${i}]`);
-        filterParts.push(`[${i}:a]atrim=${ss}:${ee},asetpts=PTS-STARTPTS[a${i}]`);
+        // Є тиша — вирізаємо потрібний відрізок
+        // -ss перед -i = швидкий seek, -t = тривалість
+        await ffmpeg.run(
+          '-ss', b.start.toFixed(3),
+          '-i', inputNames[i],
+          '-t', (b.end - b.start).toFixed(3),
+          '-c:v', 'copy',      // відео без перекодування
+          '-c:a', 'aac',       // тільки аудіо → aac
+          '-b:a', `${S.audioBitrate}`,
+          '-movflags', '+faststart',
+          outName
+        );
+      } else if (hasTrim) {
+        // Trim увімкнено але тиші немає — просто конвертуємо аудіо
+        await ffmpeg.run(
+          '-i', inputNames[i],
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-b:a', `${S.audioBitrate}`,
+          '-movflags', '+faststart',
+          outName
+        );
       } else {
-        filterParts.push(`[${i}:v]setpts=PTS-STARTPTS[v${i}]`);
-        filterParts.push(`[${i}:a]aresample[a${i}]`);
+        // Trim вимкнено — просто копіюємо без перекодування (найшвидше)
+        await ffmpeg.run(
+          '-i', inputNames[i],
+          '-c', 'copy',
+          outName
+        );
       }
+
+      processedNames.push(outName);
+      // Одразу видаляємо вхідний файл — звільняємо пам'ять
+      try { ffmpeg.FS('unlink', inputNames[i]); } catch(e) {}
+      progFill.style.width = `${50 + Math.round((i+1)/inputNames.length*35)}%`;
     }
-    const concatIn = takesList.map((_,i) => `[v${i}][a${i}]`).join('');
-    filterParts.push(`${concatIn}concat=n=${takesList.length}:v=1:a=1[vout][aout]`);
 
-    const args = [];
-    inputNames.forEach(n => args.push('-i', n));
-    args.push(
-      '-filter_complex', filterParts.join(';'),
-      '-map', '[vout]',
-      '-map', '[aout]',
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-crf', '23',
-      '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac',
-      '-b:a', `${S.audioBitrate}`,
-      '-movflags', '+faststart',
-      'output.mp4'
-    );
+    // Крок 4: склейка через concat demuxer з -c copy — миттєво
+    progLabel.textContent = 'СКЛЕЙКА...';
+    progFill.style.width = '87%';
 
-    await ffmpeg.run(...args);
+    let finalData;
+    if (processedNames.length === 1) {
+      finalData = ffmpeg.FS('readFile', processedNames[0]);
+    } else {
+      const listContent = processedNames.map(n => `file '${n}'`).join('\n');
+      ffmpeg.FS('writeFile', 'list.txt', new TextEncoder().encode(listContent));
+      await ffmpeg.run(
+        '-f', 'concat', '-safe', '0',
+        '-i', 'list.txt',
+        '-c', 'copy',
+        'output.mp4'
+      );
+      try { ffmpeg.FS('unlink', 'list.txt'); } catch(e) {}
+      finalData = ffmpeg.FS('readFile', 'output.mp4');
+      try { ffmpeg.FS('unlink', 'output.mp4'); } catch(e) {}
+    }
 
-    // Правильний порядок звільнення пам'яті (з тієї програми):
-    // 1. Спочатку видаляємо вхідні файли (~найбільші)
-    inputNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e){} });
-    inputNames.length = 0;
+    if (!finalData || finalData.length < 1000) throw new Error('Файл порожній');
 
-    // 2. Даємо GC дихнути
+    // Даємо GC дихнути перед створенням Blob
+    processedNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e){} });
     await new Promise(r => setTimeout(r, 50));
 
-    // 3. Читаємо output
     progLabel.textContent = 'ЗБЕРЕЖЕННЯ...';
     progFill.style.width = '96%';
-    const data = ffmpeg.FS('readFile', 'output.mp4');
-    if (!data || data.length < 1000) throw new Error('Файл порожній');
 
-    // 4. Одразу видаляємо output з FS
-    try { ffmpeg.FS('unlink', 'output.mp4'); } catch(e) {}
-
-    // 5. Ще один yield
-    await new Promise(r => setTimeout(r, 50));
-
-    // 6. Скачуємо
-    const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
+    const url = URL.createObjectURL(new Blob([finalData.buffer], { type: 'video/mp4' }));
     const a = document.createElement('a');
     a.href = url; a.download = `TAKE_${Date.now()}.mp4`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
@@ -753,9 +762,10 @@ async function startRender() {
 
   } catch(err) {
     console.error('Render error:', err);
-    // Очищення при помилці
     inputNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e){} });
+    processedNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e){} });
     try { ffmpeg.FS('unlink', 'output.mp4'); } catch(e) {}
+    try { ffmpeg.FS('unlink', 'list.txt'); } catch(e) {}
     progLabel.textContent = 'ПОМИЛКА: ' + err.message;
     await new Promise(r => setTimeout(r, 4000));
   } finally {
