@@ -578,15 +578,12 @@ async function _openModal() {
 // Виправлено: прибрано помилковий .remove('remove')
 function closeModal() { document.getElementById('modal-overlay').classList.remove('show'); }
 
-// ── АНАЛІЗ ТИШІ через ffmpeg (16kHz mono WAV) ──
+
+// ── АНАЛІЗ ТИШІ через ffmpeg (16kHz mono WAV — швидко і мало RAM) ──
 async function analyzeAudioBoundsFFmpeg(ffmpeg, inName) {
   const wavName = inName + '_a.wav';
   try {
-    await ffmpeg.run(
-      '-i', inName,
-      '-vn', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
-      wavName
-    );
+    await ffmpeg.run('-i', inName, '-vn', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', wavName);
     const wavData = ffmpeg.FS('readFile', wavName);
     try { ffmpeg.FS('unlink', wavName); } catch(e) {}
 
@@ -617,12 +614,12 @@ async function analyzeAudioBoundsFFmpeg(ffmpeg, inName) {
 }
 
 // ── РЕНДЕР ──
+// Все залишається у WebM — VP8 відео не можна скопіювати в MP4 без перекодування відео.
 // Логіка:
 // 1. Завантажуємо дублі у ffmpeg FS
-// 2. Аналізуємо аудіо кожного дубля (16kHz WAV — швидко)
-// 3. Вирізаємо потрібні відрізки: відео копіюємо (-c:v copy), аудіо перекодуємо в aac
-//    Це в 10-20 разів швидше ніж libx264
-// 4. Склеюємо через concat demuxer з -c copy — миттєво
+// 2. Аналізуємо аудіо кожного дубля (WAV 16kHz — маленький файл, швидко)
+// 3. Вирізаємо по таймінгах з -c copy (без перекодування — миттєво)
+// 4. Склеюємо через concat demuxer з -c copy — теж миттєво
 async function startRender() {
   closeModal();
   const progWindow = document.getElementById('render-progress');
@@ -655,7 +652,7 @@ async function startRender() {
       progFill.style.width = `${Math.round((i+1)/takesList.length*25)}%`;
     }
 
-    // Крок 2: аналіз аудіо (якщо увімкнено trim)
+    // Крок 2: аналіз аудіо по таймінгах тиші
     const trimBounds = [];
     if (S.trimSilence) {
       for (let i = 0; i < inputNames.length; i++) {
@@ -668,54 +665,31 @@ async function startRender() {
     }
 
     // Крок 3: вирізаємо кожен дубль по таймінгах
-    // -c:v copy — відео не перекодуємо (миттєво)
-    // -c:a aac  — тільки аудіо перекодуємо (дуже швидко)
+    // Все у WebM, -c copy — без жодного перекодування, миттєво
     progLabel.textContent = 'ОБРОБКА ДУБЛІВ...';
-    const hasTrim = trimBounds.some(b => b !== null);
 
     for (let i = 0; i < inputNames.length; i++) {
       const b = trimBounds[i];
-      const outName = `proc_${i}.mp4`;
+      const outName = `proc_${i}.webm`;
 
       if (b) {
-        // Є тиша — вирізаємо потрібний відрізок
-        // -ss перед -i = швидкий seek, -t = тривалість
         await ffmpeg.run(
           '-ss', b.start.toFixed(3),
           '-i', inputNames[i],
           '-t', (b.end - b.start).toFixed(3),
-          '-c:v', 'copy',      // відео без перекодування
-          '-c:a', 'aac',       // тільки аудіо → aac
-          '-b:a', `${S.audioBitrate}`,
-          '-movflags', '+faststart',
-          outName
-        );
-      } else if (hasTrim) {
-        // Trim увімкнено але тиші немає — просто конвертуємо аудіо
-        await ffmpeg.run(
-          '-i', inputNames[i],
-          '-c:v', 'copy',
-          '-c:a', 'aac',
-          '-b:a', `${S.audioBitrate}`,
-          '-movflags', '+faststart',
-          outName
-        );
-      } else {
-        // Trim вимкнено — просто копіюємо без перекодування (найшвидше)
-        await ffmpeg.run(
-          '-i', inputNames[i],
           '-c', 'copy',
           outName
         );
+      } else {
+        await ffmpeg.run('-i', inputNames[i], '-c', 'copy', outName);
       }
 
       processedNames.push(outName);
-      // Одразу видаляємо вхідний файл — звільняємо пам'ять
       try { ffmpeg.FS('unlink', inputNames[i]); } catch(e) {}
       progFill.style.width = `${50 + Math.round((i+1)/inputNames.length*35)}%`;
     }
 
-    // Крок 4: склейка через concat demuxer з -c copy — миттєво
+    // Крок 4: склейка через concat demuxer
     progLabel.textContent = 'СКЛЕЙКА...';
     progFill.style.width = '87%';
 
@@ -725,29 +699,24 @@ async function startRender() {
     } else {
       const listContent = processedNames.map(n => `file '${n}'`).join('\n');
       ffmpeg.FS('writeFile', 'list.txt', new TextEncoder().encode(listContent));
-      await ffmpeg.run(
-        '-f', 'concat', '-safe', '0',
-        '-i', 'list.txt',
-        '-c', 'copy',
-        'output.mp4'
-      );
+      await ffmpeg.run('-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', 'output.webm');
       try { ffmpeg.FS('unlink', 'list.txt'); } catch(e) {}
-      finalData = ffmpeg.FS('readFile', 'output.mp4');
-      try { ffmpeg.FS('unlink', 'output.mp4'); } catch(e) {}
+      finalData = ffmpeg.FS('readFile', 'output.webm');
+      try { ffmpeg.FS('unlink', 'output.webm'); } catch(e) {}
     }
 
     if (!finalData || finalData.length < 1000) throw new Error('Файл порожній');
 
-    // Даємо GC дихнути перед створенням Blob
     processedNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e){} });
     await new Promise(r => setTimeout(r, 50));
 
     progLabel.textContent = 'ЗБЕРЕЖЕННЯ...';
     progFill.style.width = '96%';
 
-    const url = URL.createObjectURL(new Blob([finalData.buffer], { type: 'video/mp4' }));
+    const mimeType = takesList[0].mimeType || 'video/webm';
+    const url = URL.createObjectURL(new Blob([finalData.buffer], { type: mimeType }));
     const a = document.createElement('a');
-    a.href = url; a.download = `TAKE_${Date.now()}.mp4`;
+    a.href = url; a.download = `TAKE_${Date.now()}.webm`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 10000);
 
@@ -764,7 +733,7 @@ async function startRender() {
     console.error('Render error:', err);
     inputNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e){} });
     processedNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e){} });
-    try { ffmpeg.FS('unlink', 'output.mp4'); } catch(e) {}
+    try { ffmpeg.FS('unlink', 'output.webm'); } catch(e) {}
     try { ffmpeg.FS('unlink', 'list.txt'); } catch(e) {}
     progLabel.textContent = 'ПОМИЛКА: ' + err.message;
     await new Promise(r => setTimeout(r, 4000));
