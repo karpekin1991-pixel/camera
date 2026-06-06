@@ -10,11 +10,24 @@
   :root { --red:#ff2020; --white:#f0ede8; --black:#0a0a0a; --glass:rgba(240,237,232,0.08); --glass-border:rgba(240,237,232,0.15); }
   html,body { width:100%; height:100%; background:var(--black); color:var(--white); font-family:'JetBrains Mono',monospace; overflow:hidden; touch-action:manipulation; }
 
-  #camera-wrap { position:fixed; inset:0; background:#000; }
+  /* Камера всегда видна снизу */
+  #camera-wrap { position:fixed; inset:0; background:#000; z-index:1; }
   #video { width:100%; height:100%; object-fit:cover; display:block; }
 
-  #freeze-canvas { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; display:none; z-index:4; }
-  #pause-overlay { position:fixed; inset:0; background:rgba(10,10,10,0.45); opacity:0; pointer-events:none; transition:opacity 0.25s ease; z-index:5; }
+  /* Замороженный кадр поверх камеры, но с прозрачностью — камера просвечивает */
+  #freeze-canvas {
+    position:fixed; inset:0; width:100%; height:100%;
+    object-fit:cover; display:none; z-index:2;
+    opacity:0.55; /* полупрозрачный — видно и последний кадр и живую камеру */
+  }
+
+  /* Цветной оверлей поверх замороженного кадра */
+  #pause-overlay {
+    position:fixed; inset:0;
+    background:rgba(10,10,10,0.25);
+    opacity:0; pointer-events:none;
+    transition:opacity 0.25s ease; z-index:3;
+  }
   #pause-overlay.active { opacity:1; }
 
   #rec-badge { position:fixed; top:20px; left:20px; display:flex; align-items:center; gap:8px; z-index:20; opacity:0; transition:opacity 0.2s; }
@@ -33,9 +46,10 @@
 
   #bottom-bar { position:fixed; bottom:0; left:0; right:0; padding:24px 24px 40px; display:flex; align-items:flex-end; justify-content:space-between; z-index:30; background:linear-gradient(to top,rgba(0,0,0,0.7) 0%,transparent 100%); }
 
-  #btn-delete { display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; opacity:0.85; transition:opacity 0.2s,transform 0.15s; -webkit-tap-highlight-color:transparent; user-select:none; min-width:64px; }
+  #btn-delete { display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; opacity:0.85; transition:opacity 0.2s,transform 0.15s; -webkit-tap-highlight-color:transparent; user-select:none; min-width:56px; }
   #btn-delete:active { transform:scale(0.92); }
   #btn-delete.disabled { opacity:0.2; pointer-events:none; }
+
   .btn-icon { width:44px; height:44px; border-radius:50%; background:var(--glass); border:1px solid var(--glass-border); display:flex; align-items:center; justify-content:center; backdrop-filter:blur(8px); }
   #btn-delete .btn-icon { background:rgba(255,32,32,0.12); border-color:rgba(255,32,32,0.3); }
   .btn-label { font-size:9px; letter-spacing:1.5px; text-transform:uppercase; color:rgba(240,237,232,0.5); text-align:center; line-height:1.3; }
@@ -51,12 +65,18 @@
   .record-inner { width:100%; height:100%; border-radius:50%; background:var(--white); transition:all 0.25s cubic-bezier(0.4,0,0.2,1); }
   #btn-record.recording .record-inner { background:var(--red); border-radius:16px; width:38px; height:38px; margin:17px; }
 
-  #btn-edit { display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; opacity:0.85; transition:opacity 0.2s,transform 0.15s; -webkit-tap-highlight-color:transparent; user-select:none; min-width:64px; }
+  /* Правая группа кнопок: камера + монтаж */
+  #right-btns { display:flex; flex-direction:column; align-items:center; gap:12px; }
+
+  #btn-flip { display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; opacity:0.85; transition:opacity 0.2s,transform 0.15s; -webkit-tap-highlight-color:transparent; user-select:none; min-width:56px; }
+  #btn-flip:active { transform:scale(0.92); }
+
+  #btn-edit { display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; opacity:0.85; transition:opacity 0.2s,transform 0.15s; -webkit-tap-highlight-color:transparent; user-select:none; min-width:56px; }
   #btn-edit:active { transform:scale(0.92); }
   #btn-edit.disabled { opacity:0.2; pointer-events:none; }
 
   #status-msg { position:fixed; bottom:130px; left:50%; transform:translateX(-50%); font-size:11px; letter-spacing:2px; text-transform:uppercase; color:rgba(240,237,232,0.45); z-index:25; white-space:nowrap; }
-  #delete-hint { position:fixed; bottom:130px; right:20px; font-size:9px; letter-spacing:1.5px; color:rgba(255,32,32,0.5); text-transform:uppercase; z-index:25; text-align:right; line-height:1.6; opacity:0; transition:opacity 0.4s; }
+  #delete-hint { position:fixed; bottom:130px; left:20px; font-size:9px; letter-spacing:1.5px; color:rgba(255,32,32,0.5); text-transform:uppercase; z-index:25; line-height:1.6; opacity:0; transition:opacity 0.4s; }
   #delete-hint.show { opacity:1; }
 
   #modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.85); backdrop-filter:blur(12px); z-index:100; display:none; align-items:center; justify-content:center; padding:24px; }
@@ -89,6 +109,7 @@
 <body>
 
 <div id="camera-wrap"><video id="video" autoplay muted playsinline></video></div>
+<!-- Замороженный кадр — полупрозрачный, камера видна сквозь него -->
 <canvas id="freeze-canvas"></canvas>
 <div id="pause-overlay"></div>
 
@@ -97,9 +118,10 @@
 <div id="timer">00:00</div>
 <div id="takes-list"></div>
 <div id="status-msg">НАЖМИТЕ ДЛЯ ЗАПИСИ</div>
-<div id="delete-hint">2× УДАЛИТЬ 2 ДУБЛЯ</div>
+<div id="delete-hint">2× — УДАЛИТЬ 2 ДУБЛЯ</div>
 
 <div id="bottom-bar">
+  <!-- Удалить -->
   <div id="btn-delete" class="disabled" onclick="handleDelete()">
     <div class="icon-wrap">
       <div class="btn-icon">
@@ -110,16 +132,27 @@
     <span class="btn-label">УДАЛИТЬ<br>ДУБЛЬ</span>
   </div>
 
+  <!-- Запись -->
   <div id="btn-record" onclick="handleRecord()">
     <div class="record-ring"></div>
     <div class="record-inner"></div>
   </div>
 
-  <div id="btn-edit" class="disabled" onclick="openModal()">
-    <div class="btn-icon">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+  <!-- Правая группа: переключить камеру + монтаж -->
+  <div id="right-btns">
+    <div id="btn-flip" onclick="flipCamera()">
+      <div class="btn-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>
+      </div>
+      <span class="btn-label">КАМЕРА</span>
     </div>
-    <span class="btn-label">МОНТАЖ</span>
+
+    <div id="btn-edit" class="disabled" onclick="openModal()">
+      <div class="btn-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+      </div>
+      <span class="btn-label">МОНТАЖ</span>
+    </div>
   </div>
 </div>
 
@@ -146,32 +179,49 @@
   <p>Разрешите доступ к камере<br>и микрофону в браузере</p>
 </div>
 
-<!-- ffmpeg.wasm загружается локально из /ffmpeg/ -->
 <script src="/ffmpeg/ffmpeg.min.js"></script>
-
 <script>
-// ── СОСТОЯНИЕ ──
 let stream = null, mediaRecorder = null;
-let takes = []; // [{blob, duration, mimeType}]
+let takes = [];
 let currentChunks = [];
 let isRecording = false;
 let timerInterval = null, timerStart = 0;
 let deleteClickTimeout = null, deleteClickCount = 0;
-let ffmpegLoaded = false;
+let facingMode = 'environment'; // задняя камера по умолчанию
+let ffmpegInstance = null; // пересоздаём каждый раз
 
 // ── ИНИЦИАЛИЗАЦИЯ ──
 async function init() {
+  await startCamera(facingMode);
+}
+
+async function startCamera(facing) {
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop());
+    stream = null;
+  }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode:'environment', width:{ideal:1920}, height:{ideal:1080} },
+      video: { facingMode: facing, width:{ideal:1920}, height:{ideal:1080} },
       audio: true
     });
   } catch(e) {
-    try { stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:true }); }
-    catch(e2) { document.getElementById('no-camera').classList.add('show'); return; }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
+    } catch(e2) {
+      document.getElementById('no-camera').classList.add('show');
+      return;
+    }
   }
   document.getElementById('video').srcObject = stream;
   updateUI();
+}
+
+// ── ПЕРЕКЛЮЧЕНИЕ КАМЕРЫ ──
+async function flipCamera() {
+  if (isRecording) return; // не переключаем во время записи
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  await startCamera(facingMode);
 }
 
 // ── ЗАПИСЬ ──
@@ -181,6 +231,7 @@ function handleRecord() {
 }
 
 function startRecording() {
+  // Скрываем замороженный кадр — живая камера теперь полностью видна
   hideFreezeFrame();
   currentChunks = [];
 
@@ -194,10 +245,9 @@ function startRecording() {
 
   mediaRecorder.onstop = () => {
     const mimeType = mediaRecorder.mimeType || 'video/webm';
-    const blob = new Blob(currentChunks, {type: mimeType});
-    takes.push({ blob, duration: Date.now() - timerStart, mimeType });
+    takes.push({ blob: new Blob(currentChunks, {type:mimeType}), duration: Date.now()-timerStart, mimeType });
     currentChunks = [];
-    showFreezeFrame();
+    showFreezeFrame(); // показываем полупрозрачный последний кадр
     updateUI();
   };
 
@@ -215,14 +265,12 @@ function stopRecording() {
 }
 
 function getSupportedMimeType() {
-  const types = [
-    'video/mp4;codecs=h264,aac','video/mp4',
-    'video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'
-  ];
+  const types = ['video/mp4;codecs=h264,aac','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
   return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
 }
 
 // ── ЗАМОРОЖЕННЫЙ КАДР ──
+// Рисуем последний кадр на canvas с opacity 0.55 — сквозь него видна живая камера
 function showFreezeFrame() {
   const video = document.getElementById('video');
   const canvas = document.getElementById('freeze-canvas');
@@ -284,16 +332,17 @@ function handleDelete() {
 function openModal() {
   if (isRecording) stopRecording();
   document.getElementById('modal-desc').textContent =
-    `${takes.length} ${pluralTake(takes.length)} будут склеены в одно видео`;
+    `${takes.length} ${pluralTake(takes.length)} будуть склеєні в одне відео`;
   document.getElementById('modal-takes').innerHTML = takes.map((t,i) =>
     `<div class="modal-take-chip">ДУБЛЬ ${i+1} · ${Math.floor(t.duration/1000)}с</div>`
   ).join('');
   document.getElementById('modal-overlay').classList.add('show');
 }
 function closeModal() { document.getElementById('modal-overlay').classList.remove('show'); }
-function pluralTake(n) { return n===1?'дубль':n<=4?'дубля':'дублей'; }
+function pluralTake(n) { return n===1?'дубль':n<=4?'дублі':'дублів'; }
 
 // ── РЕНДЕР ЧЕРЕЗ FFMPEG.WASM ──
+// Кожен раз створюємо новий екземпляр — виключає помилку "FFmpeg was not ready"
 async function startRender() {
   closeModal();
   if (!takes.length) return;
@@ -302,65 +351,50 @@ async function startRender() {
   const fill = document.getElementById('progress-fill');
   const label = document.getElementById('render-label');
   progress.classList.add('show');
+  fill.style.width = '0%';
 
   try {
-    // Инициализация ffmpeg
-    label.textContent = 'ЗАГРУЗКА FFMPEG...';
+    label.textContent = 'ЗАВАНТАЖЕННЯ FFMPEG...';
     fill.style.width = '5%';
 
+    // Завжди створюємо новий екземпляр
     const { createFFmpeg, fetchFile } = FFmpeg;
     const ffmpeg = createFFmpeg({
       corePath: '/ffmpeg/ffmpeg-core.js',
       log: false,
       progress: ({ ratio }) => {
         if (ratio > 0) {
-          fill.style.width = `${50 + ratio * 45}%`;
+          fill.style.width = `${50 + ratio * 44}%`;
           label.textContent = `РЕНДЕР ${Math.round(ratio * 100)}%`;
         }
       }
     });
 
-    if (!ffmpegLoaded) {
-      await ffmpeg.load();
-      ffmpegLoaded = true;
-    }
-
+    await ffmpeg.load();
     fill.style.width = '15%';
-    label.textContent = 'ЗАПИСЬ ФАЙЛОВ В ПАМЯТЬ...';
+    label.textContent = 'ЗАПИС ФАЙЛІВ...';
 
-    // Определяем расширение
     const ext = takes[0].mimeType.includes('mp4') ? 'mp4' : 'webm';
-
-    // Записываем каждый дубль в виртуальную ФС ffmpeg
     const fileList = [];
+
     for (let i = 0; i < takes.length; i++) {
       const name = `take${i}.${ext}`;
-      ffmpeg.FS('writeFile', name, await FFmpeg.fetchFile(takes[i].blob));
+      ffmpeg.FS('writeFile', name, await fetchFile(takes[i].blob));
       fileList.push(`file '${name}'`);
       fill.style.width = `${15 + (i+1)/takes.length * 30}%`;
-      label.textContent = `ДУБЛЬ ${i+1} из ${takes.length} ЗАГРУЖЕН`;
+      label.textContent = `ДУБЛЬ ${i+1} з ${takes.length} ЗАВАНТАЖЕНО`;
     }
 
-    // Создаём список файлов для concat
-    const concatList = fileList.join('\n');
-    ffmpeg.FS('writeFile', 'list.txt', new TextEncoder().encode(concatList));
+    ffmpeg.FS('writeFile', 'list.txt', new TextEncoder().encode(fileList.join('\n')));
 
     fill.style.width = '50%';
-    label.textContent = 'СКЛЕЙКА ДУБЛЕЙ...';
+    label.textContent = 'СКЛЕЙКА ДУБЛІВ...';
 
-    // Склеиваем через concat demuxer (без перекодирования — быстро!)
-    await ffmpeg.run(
-      '-f', 'concat',
-      '-safe', '0',
-      '-i', 'list.txt',
-      '-c', 'copy',
-      `output.${ext}`
-    );
+    await ffmpeg.run('-f','concat','-safe','0','-i','list.txt','-c','copy',`output.${ext}`);
 
     fill.style.width = '97%';
-    label.textContent = 'СОХРАНЕНИЕ ФАЙЛА...';
+    label.textContent = 'ЗБЕРЕЖЕННЯ...';
 
-    // Читаем результат
     const data = ffmpeg.FS('readFile', `output.${ext}`);
     const blob = new Blob([data.buffer], { type: takes[0].mimeType });
 
@@ -368,7 +402,6 @@ async function startRender() {
     label.textContent = 'ГОТОВО!';
     await new Promise(r => setTimeout(r, 400));
 
-    // Скачиваем
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -378,12 +411,10 @@ async function startRender() {
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 10000);
 
-    // Очищаем виртуальную ФС
-    for (let i = 0; i < takes.length; i++) {
-      try { ffmpeg.FS('unlink', `take${i}.${ext}`); } catch(e) {}
-    }
-    try { ffmpeg.FS('unlink', 'list.txt'); } catch(e) {}
-    try { ffmpeg.FS('unlink', `output.${ext}`); } catch(e) {}
+    // Очищаємо FS
+    for (let i = 0; i < takes.length; i++) { try { ffmpeg.FS('unlink', `take${i}.${ext}`); } catch(e){} }
+    try { ffmpeg.FS('unlink', 'list.txt'); } catch(e){}
+    try { ffmpeg.FS('unlink', `output.${ext}`); } catch(e){}
 
     progress.classList.remove('show');
     takes = [];
@@ -393,7 +424,7 @@ async function startRender() {
 
   } catch(e) {
     console.error(e);
-    label.textContent = 'ОШИБКА: ' + e.message;
+    label.textContent = 'ПОМИЛКА: ' + e.message;
     fill.style.width = '100%';
     setTimeout(() => progress.classList.remove('show'), 4000);
   }
@@ -408,24 +439,19 @@ function showStatus(msg) {
 }
 function updateStatusText() {
   const el = document.getElementById('status-msg');
-  if (isRecording) el.textContent = 'НАЖМИТЕ ДЛЯ СТОПА';
-  else if (!takes.length) el.textContent = 'НАЖМИТЕ ДЛЯ ЗАПИСИ';
-  else el.textContent = `ДУБЛЬ ${takes.length} СНЯТ — НАЖМИТЕ ДЛЯ СЛЕДУЮЩЕГО`;
+  if (isRecording) el.textContent = 'НАТИСНІТЬ ДЛЯ СТОПУ';
+  else if (!takes.length) el.textContent = 'НАТИСНІТЬ ДЛЯ ЗАПИСУ';
+  else el.textContent = `ДУБЛЬ ${takes.length} ЗНЯТИЙ`;
 }
 
-// ── ОБНОВЛЕНИЕ UI ──
+// ── UI ──
 function updateUI() {
   const btnRecord = document.getElementById('btn-record');
   const recBadge = document.getElementById('rec-badge');
   const deleteBadge = document.getElementById('delete-count-badge');
 
-  if (isRecording) {
-    btnRecord.classList.add('recording');
-    recBadge.classList.add('visible');
-  } else {
-    btnRecord.classList.remove('recording');
-    recBadge.classList.remove('visible');
-  }
+  btnRecord.classList[isRecording ? 'add' : 'remove']('recording');
+  recBadge.classList[isRecording ? 'add' : 'remove']('visible');
 
   document.getElementById('take-counter').textContent =
     isRecording ? `ДУБЛЬ ${takes.length + 1}` : `ДУБЛЬ ${takes.length + 1}`;
@@ -437,25 +463,23 @@ function updateUI() {
 
   document.getElementById('btn-edit').classList[takes.length >= 1 && !isRecording ? 'remove' : 'add']('disabled');
 
-  const list = document.getElementById('takes-list');
-  list.innerHTML = Array.from({length: Math.min(takes.length + 3, 14)}, (_,i) => {
-    let cls = 'take-pip';
-    if (i < takes.length) cls += ' done';
-    else if (i === takes.length && isRecording) cls += ' recording';
-    return `<div class="${cls}"></div>`;
-  }).join('');
+  document.getElementById('takes-list').innerHTML =
+    Array.from({length: Math.min(takes.length + 3, 14)}, (_,i) => {
+      let cls = 'take-pip';
+      if (i < takes.length) cls += ' done';
+      else if (i === takes.length && isRecording) cls += ' recording';
+      return `<div class="${cls}"></div>`;
+    }).join('');
 
   updateStatusText();
 }
 
-// ── BLUETOOTH / КЛАВИАТУРА ──
+// ── BLUETOOTH / КЛАВІАТУРА ──
 const TRIGGER_KEYS = new Set([' ','Enter','ArrowUp','ArrowDown','MediaPlayPause','MediaPlay','MediaPause','VolumeUp','VolumeDown','F5','F8','PageUp','PageDown']);
 document.addEventListener('keydown', e => {
   if (TRIGGER_KEYS.has(e.key)) { e.preventDefault(); handleRecord(); }
 });
-window.addEventListener('gamepadconnected', startGamepadPolling);
-let gamepadPolling = false;
-function startGamepadPolling() {
+window.addEventListener('gamepadconnected', () => {
   if (gamepadPolling) return; gamepadPolling = true;
   let prev = {};
   (function poll() {
@@ -469,7 +493,8 @@ function startGamepadPolling() {
     }
     requestAnimationFrame(poll);
   })();
-}
+});
+let gamepadPolling = false;
 
 init();
 </script>
