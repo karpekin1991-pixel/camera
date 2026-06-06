@@ -459,8 +459,17 @@ async function flipCamera() {
 // ── ЗАПИС ──
 function getSessionMimeType() {
   if (sessionMimeType) return sessionMimeType;
-  const types = ['video/webm;codecs=vp8,opus','video/webm;codecs=vp9,opus','video/webm','video/mp4;codecs=h264,aac','video/mp4'];
+  // MP4 спочатку — краща сумісність і правильний контейнер для монтажу
+  const types = [
+    'video/mp4;codecs=h264,aac',
+    'video/mp4;codecs=avc1,mp4a',
+    'video/mp4',
+    'video/webm;codecs=vp8,opus',
+    'video/webm;codecs=vp9,opus',
+    'video/webm'
+  ];
   sessionMimeType = types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  console.log('Recording mime:', sessionMimeType);
   return sessionMimeType;
 }
 
@@ -774,32 +783,55 @@ async function startRender() {
       }
     });
     await ffmpeg.load();
-    fill.style.width = '15%'; label.textContent = 'ЗАПИС ФАЙЛІВ...';
-    const ext = takes[0].mimeType.includes('mp4') ? 'mp4' : 'webm';
+    fill.style.width = '15%'; label.textContent = 'ЗАВАНТАЖЕННЯ ДУБЛІВ...';
+
+    // Записуємо всі дублі у ffmpeg FS (завжди як .webm — вхідний формат)
     const fileList = [];
     for (let i = 0; i < takes.length; i++) {
-      const name = `take${i}.${ext}`;
+      const name = `take${i}.webm`;
       ffmpeg.FS('writeFile', name, await fetchFile(takes[i].blob));
       fileList.push(`file '${name}'`);
-      fill.style.width = `${15+(i+1)/takes.length*30}%`;
+      fill.style.width = `${15 + (i+1)/takes.length * 25}%`;
       label.textContent = `ДУБЛЬ ${i+1} з ${takes.length} ЗАВАНТАЖЕНО`;
     }
+
+    // Concat список
     ffmpeg.FS('writeFile', 'list.txt', new TextEncoder().encode(fileList.join('\n')));
-    fill.style.width = '50%'; label.textContent = 'СКЛЕЙКА ДУБЛІВ...';
-    await ffmpeg.run('-f','concat','-safe','0','-i','list.txt','-c','copy',`output.${ext}`);
+    fill.style.width = '42%';
+    label.textContent = 'СКЛЕЙКА І КОНВЕРТАЦІЯ В MP4...';
+
+    // Перекодуємо в h264/aac mp4 — це вирішує чорний екран і webm проблему
+    await ffmpeg.run(
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', 'list.txt',
+      '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',  // розмір кратний 2 — вимога h264
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',   // максимальна швидкість кодування
+      '-crf', '23',             // якість (18=відмінна, 28=прийнятна)
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-movflags', '+faststart', // mp4 оптимізований для стрімінгу
+      'output.mp4'
+    );
+
     fill.style.width = '97%'; label.textContent = 'ЗБЕРЕЖЕННЯ...';
-    const data = ffmpeg.FS('readFile', `output.${ext}`);
-    const blob = new Blob([data.buffer], {type: takes[0].mimeType});
+    const data = ffmpeg.FS('readFile', 'output.mp4');
+    const blob = new Blob([data.buffer], { type: 'video/mp4' });
     fill.style.width = '100%'; label.textContent = 'ГОТОВО!';
     await new Promise(r => setTimeout(r, 400));
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `final_${Date.now()}.${ext}`;
+    a.href = url; a.download = `final_${Date.now()}.mp4`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-    for (let i = 0; i < takes.length; i++) { try { ffmpeg.FS('unlink', `take${i}.${ext}`); } catch(e){} }
+
+    // Очищаємо FS
+    for (let i = 0; i < takes.length; i++) { try { ffmpeg.FS('unlink', `take${i}.webm`); } catch(e){} }
     try { ffmpeg.FS('unlink','list.txt'); } catch(e){}
-    try { ffmpeg.FS('unlink',`output.${ext}`); } catch(e){}
+    try { ffmpeg.FS('unlink','output.mp4'); } catch(e){}
+
     progress.classList.remove('show');
     takes = []; hideFreezeFrame(); updateUI(); updateMemLabel(); showStatus('СКАЧАНО!');
   } catch(e) {
@@ -833,30 +865,39 @@ function updateUI() {
   const badge = document.getElementById('delete-count-badge');
   if (takes.length >= 2) { badge.textContent='2'; badge.classList.add('show'); } else badge.classList.remove('show');
   document.getElementById('btn-edit').classList[takes.length>=1&&!isRecording?'remove':'add']('disabled');
-  document.getElementById('takes-list').innerHTML =
-    Array.from({length:Math.min(takes.length+3,14)},(_,i)=>{
-      let cls='take-pip';
-      if(i<takes.length) cls+=' done';
-      else if(i===takes.length&&isRecording) cls+=' recording';
-      return `<div class="${cls}"></div>`;
-    }).join('');
+
+  // Не перемальовуємо піпки під час запису — зайве навантаження
+  if (!isRecording) {
+    document.getElementById('takes-list').innerHTML =
+      Array.from({length:Math.min(takes.length+3,14)},(_,i)=>{
+        let cls='take-pip';
+        if(i<takes.length) cls+=' done';
+        return `<div class="${cls}"></div>`;
+      }).join('');
+  }
   updateStatusText();
 }
 
 // ── BLUETOOTH / КЛАВІАТУРА ──
 const TRIGGER_KEYS = new Set([' ','Enter','ArrowUp','ArrowDown','MediaPlayPause','MediaPlay','MediaPause','VolumeUp','VolumeDown','F5','F8','PageUp','PageDown']);
 document.addEventListener('keydown', e => { if (TRIGGER_KEYS.has(e.key)) { e.preventDefault(); handleRecord(); } });
+
+// Gamepad: setInterval замість requestAnimationFrame — не блокує рендер камери
 let gamepadPolling = false;
 window.addEventListener('gamepadconnected', () => {
-  if (gamepadPolling) return; gamepadPolling = true;
+  if (gamepadPolling) return;
+  gamepadPolling = true;
   let prev = {};
-  (function poll() {
+  setInterval(() => {
     for (const gp of navigator.getGamepads()) {
       if (!gp) continue;
-      gp.buttons.forEach((btn,i) => { const k=gp.index+'_'+i; if(btn.pressed&&!prev[k]) handleRecord(); prev[k]=btn.pressed; });
+      gp.buttons.forEach((btn, i) => {
+        const k = gp.index + '_' + i;
+        if (btn.pressed && !prev[k]) handleRecord();
+        prev[k] = btn.pressed;
+      });
     }
-    requestAnimationFrame(poll);
-  })();
+  }, 100); // перевіряємо 10 разів/сек — достатньо для кнопки
 });
 
 init();
