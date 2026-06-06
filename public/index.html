@@ -776,8 +776,11 @@ async function startRender() {
   try {
     label.textContent = 'ЗАВАНТАЖЕННЯ FFMPEG...'; fill.style.width = '5%';
     const { createFFmpeg, fetchFile } = FFmpeg;
+    const ffmpegLogs = [];
     const ffmpeg = createFFmpeg({
-      corePath: '/ffmpeg/ffmpeg-core.js', log: true,
+      corePath: '/ffmpeg/ffmpeg-core.js',
+      log: false,
+      logger: ({ message }) => { ffmpegLogs.push(message); },
       progress: ({ ratio }) => {
         if (ratio > 0) {
           fill.style.width = `${50 + ratio * 44}%`;
@@ -867,8 +870,16 @@ async function startRender() {
     takes = []; hideFreezeFrame(); updateUI(); updateMemLabel(); showStatus('СКАЧАНО!');
   } catch(e) {
     console.error(e);
-    label.textContent = 'ПОМИЛКА: ' + e.message;
-    setTimeout(() => progress.classList.remove('show'), 4000);
+    // Показуємо останні 8 рядків логу ffmpeg прямо на екрані
+    const relevantLogs = ffmpegLogs
+      .filter(l => l.includes('Error') || l.includes('error') || l.includes('Invalid') || l.includes('No such'))
+      .slice(-4);
+    const logText = relevantLogs.length > 0
+      ? relevantLogs.join(' | ')
+      : ffmpegLogs.slice(-3).join(' | ');
+    label.textContent = 'ПОМИЛКА: ' + (logText || e.message);
+    label.style.fontSize = '9px';
+    setTimeout(() => { progress.classList.remove('show'); label.style.fontSize = ''; }, 8000);
   }
 }
 
