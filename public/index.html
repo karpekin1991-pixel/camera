@@ -20,7 +20,7 @@
   #freeze-canvas {
     position:fixed; inset:0; width:100%; height:100%;
     object-fit:cover; display:none; z-index:2;
-    opacity:0.55;
+    opacity:0.35;
     filter: grayscale(100%);
   }
 
@@ -230,34 +230,65 @@ async function flipCamera() {
   await startCamera(facingMode);
 }
 
-// ── ЗАПИСЬ ──
+// Фіксований mimeType на всю сесію — визначається один раз
+let sessionMimeType = null;
+function getSessionMimeType() {
+  if (sessionMimeType) return sessionMimeType;
+  const types = ['video/webm;codecs=vp8,opus','video/webm;codecs=vp9,opus','video/webm','video/mp4;codecs=h264,aac','video/mp4'];
+  sessionMimeType = types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  return sessionMimeType;
+}
+
+// ── ЗАПИС ──
 function handleRecord() {
   if (!stream) return;
   if (isRecording) stopRecording(); else startRecording();
 }
 
 function startRecording() {
-  // Скрываем замороженный кадр — живая камера теперь полностью видна
   hideFreezeFrame();
   currentChunks = [];
+  mediaRecorder = null;
 
-  const mime = getSupportedMimeType();
-  try { mediaRecorder = new MediaRecorder(stream, mime ? {mimeType:mime} : {}); }
-  catch(e) { mediaRecorder = new MediaRecorder(stream); }
+  // Перевіряємо що треки живі
+  const activeTracks = stream.getTracks().filter(t => t.readyState === 'live');
+  if (activeTracks.length === 0) {
+    startCamera(facingMode).then(() => setTimeout(startRecording, 300));
+    return;
+  }
+
+  const mime = getSessionMimeType();
+  try {
+    mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+  } catch(e) {
+    try { mediaRecorder = new MediaRecorder(stream); }
+    catch(e2) { showStatus('ПОМИЛКА ЗАПИСУ'); return; }
+  }
+
+  const recordMime = mediaRecorder.mimeType || 'video/webm';
 
   mediaRecorder.ondataavailable = e => {
     if (e.data && e.data.size > 0) currentChunks.push(e.data);
   };
 
-  mediaRecorder.onstop = () => {
-    const mimeType = mediaRecorder.mimeType || 'video/webm';
-    takes.push({ blob: new Blob(currentChunks, {type:mimeType}), duration: Date.now()-timerStart, mimeType });
-    currentChunks = [];
-    showFreezeFrame(); // показываем полупрозрачный последний кадр
+  mediaRecorder.onerror = e => {
+    console.error('MediaRecorder error:', e);
+    isRecording = false;
+    stopTimer();
+    showStatus('ПОМИЛКА — СПРОБУЙТЕ ЩЕ РАЗ');
     updateUI();
   };
 
-  mediaRecorder.start(100);
+  mediaRecorder.onstop = () => {
+    if (currentChunks.length > 0) {
+      takes.push({ blob: new Blob(currentChunks, { type: recordMime }), duration: Date.now() - timerStart, mimeType: recordMime });
+    }
+    currentChunks = [];
+    showFreezeFrame();
+    updateUI();
+  };
+
+  mediaRecorder.start(200);
   isRecording = true;
   timerStart = Date.now();
   startTimer();
@@ -265,14 +296,12 @@ function startRecording() {
 }
 
 function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.requestData();
+    mediaRecorder.stop();
+  }
   isRecording = false;
   stopTimer();
-}
-
-function getSupportedMimeType() {
-  const types = ['video/mp4;codecs=h264,aac','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
-  return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
 }
 
 // ── ЗАМОРОЖЕННЫЙ КАДР ──
