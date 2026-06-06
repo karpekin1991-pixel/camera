@@ -13,12 +13,15 @@
   /* Камера всегда видна снизу */
   #camera-wrap { position:fixed; inset:0; background:#000; z-index:1; }
   #video { width:100%; height:100%; object-fit:cover; display:block; }
+  /* Зеркало только для фронтальной камеры — управляется JS через класс */
+  #video.mirrored { transform: scaleX(-1); }
 
-  /* Замороженный кадр поверх камеры, но с прозрачностью — камера просвечивает */
+  /* Замороженный кадр поверх камеры — полупрозрачный ч/б */
   #freeze-canvas {
     position:fixed; inset:0; width:100%; height:100%;
     object-fit:cover; display:none; z-index:2;
-    opacity:0.55; /* полупрозрачный — видно и последний кадр и живую камеру */
+    opacity:0.55;
+    filter: grayscale(100%);
   }
 
   /* Цветной оверлей поверх замороженного кадра */
@@ -213,7 +216,10 @@ async function startCamera(facing) {
       return;
     }
   }
-  document.getElementById('video').srcObject = stream;
+  const video = document.getElementById('video');
+  video.srcObject = stream;
+  // Дзеркало тільки для фронтальної камери
+  video.classList.toggle('mirrored', facing === 'user');
   updateUI();
 }
 
