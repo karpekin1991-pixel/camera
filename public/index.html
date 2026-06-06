@@ -541,19 +541,20 @@ function openModal() {
 function closeModal() { document.getElementById('modal-overlay').classList.remove('show'); }
 function pluralTake(n) { return n===1?'дубль':n<=4?'дублі':'дублів'; }
 
-// ── АНАЛІЗ ТИШІ ──
+// ── АНАЛІЗ ТИШІ — тільки аудіодоріжка, відео не чіпаємо ──
 async function analyzeAudioBounds(blob) {
   const ab = await blob.arrayBuffer();
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   let buf;
   try { buf = await ctx.decodeAudioData(ab.slice(0)); }
   catch(e) { return null; }
-  finally { ctx.close(); }
+  finally { try { ctx.close(); } catch(e) {} }
 
   const threshold = Math.pow(10, S.trimThreshold / 20);
   const sr = buf.sampleRate;
   const len = buf.length;
   const ch = buf.numberOfChannels;
+  const total = len / sr;
 
   let startSample = 0;
   outer1: for (let i = 0; i < len; i++)
@@ -561,19 +562,18 @@ async function analyzeAudioBounds(blob) {
       if (Math.abs(buf.getChannelData(c)[i]) > threshold) { startSample = i; break outer1; }
 
   let endSample = len - 1;
-  outer2: for (let i = len-1; i >= 0; i--)
+  outer2: for (let i = len - 1; i >= 0; i--)
     for (let c = 0; c < ch; c++)
       if (Math.abs(buf.getChannelData(c)[i]) > threshold) { endSample = i; break outer2; }
 
-  const start = Math.max(0, startSample/sr - 0.05);
-  const end = Math.min(len/sr, endSample/sr + 0.05);
-  const total = len/sr;
+  const start = Math.max(0, startSample / sr - 0.05);
+  const end = Math.min(total, endSample / sr + 0.05);
 
-  if (start < 0.1 && (total - end) < 0.1) return null;
+  if (start < 0.15 && (total - end) < 0.15) return null;
   return { start, end };
 }
 
-// ── РЕНДЕР — без перекодування, тільки trim + concat ──
+// ── РЕНДЕР ──
 async function startRender() {
   closeModal();
   if (takes.length === 0) return;
@@ -593,83 +593,108 @@ async function startRender() {
   }
 
   try {
-    // Крок 1: аналіз тиші (якщо увімкнено)
+    // Крок 1: аналіз аудіо для знаходження меж тиші
     const trimBounds = [];
     if (S.trimSilence) {
       for (let i = 0; i < takes.length; i++) {
         progLabel.textContent = `АНАЛІЗ ТИШІ ${i+1}/${takes.length}...`;
-        progFill.style.width = `${Math.round((i+1)/takes.length * 20)}%`;
-        const bounds = await analyzeAudioBounds(takes[i].blob);
-        trimBounds.push(bounds);
+        progFill.style.width = `${Math.round((i+1)/takes.length*15)}%`;
+        trimBounds.push(await analyzeAudioBounds(takes[i].blob));
       }
     } else {
       takes.forEach(() => trimBounds.push(null));
     }
 
-    // Крок 2: записуємо файли у ffmpeg FS і обрізаємо якщо треба
-    progLabel.textContent = 'ОБРОБКА ДУБЛІВ...';
+    // Крок 2: записуємо файли у ffmpeg FS
+    progLabel.textContent = 'ЗАВАНТАЖЕННЯ ДУБЛІВ...';
+    const inputNames = [];
+    for (let i = 0; i < takes.length; i++) {
+      const name = `in_${i}.webm`;
+      ffmpeg.FS('writeFile', name, new Uint8Array(await takes[i].blob.arrayBuffer()));
+      inputNames.push(name);
+      progFill.style.width = `${15+Math.round((i+1)/takes.length*20)}%`;
+    }
+
+    // Крок 3: обробляємо кожен дубль
+    // Якщо хоч один дубль потребує trim — всі перекодуємо в mp4
+    // (щоб concat demuxer отримав однаковий формат і timestamps)
+    // Якщо trim вимкнено — просто concat webm без перекодування
+    const needsReencode = trimBounds.some(b => b !== null);
     const processedNames = [];
 
     for (let i = 0; i < takes.length; i++) {
-      const inName = `in_${i}.webm`;
-      const buffer = await takes[i].blob.arrayBuffer();
-      ffmpeg.FS('writeFile', inName, new Uint8Array(buffer));
-
       const b = trimBounds[i];
-      if (b) {
-        // Обрізаємо без перекодування — миттєво
-        const outName = `trimmed_${i}.webm`;
-        await ffmpeg.run(
-          '-i', inName,
-          '-ss', b.start.toFixed(3),
-          '-to', b.end.toFixed(3),
-          '-c', 'copy',
+      progLabel.textContent = `ОБРОБКА ДУБЛЯ ${i+1}/${takes.length}...`;
+
+      if (needsReencode) {
+        // Перекодуємо в mp4 з обрізанням або без
+        // -ss перед -i = швидкий seek, -to після = тривалість від точки seek
+        const outName = `proc_${i}.mp4`;
+        const args = [];
+        if (b) {
+          args.push('-ss', b.start.toFixed(3));
+        }
+        args.push('-i', inputNames[i]);
+        if (b) {
+          // -t це тривалість від точки -ss
+          args.push('-t', (b.end - b.start).toFixed(3));
+        }
+        args.push(
+          '-c:v', 'libx264',
+          '-preset', 'ultrafast',
+          '-crf', '23',
+          '-pix_fmt', 'yuv420p',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-avoid_negative_ts', 'make_zero',
           outName
         );
-        try { ffmpeg.FS('unlink', inName); } catch(e) {}
+        await ffmpeg.run(...args);
         processedNames.push(outName);
       } else {
-        processedNames.push(inName);
+        // Без trim — залишаємо webm як є
+        processedNames.push(inputNames[i]);
       }
 
-      progFill.style.width = `${20 + Math.round((i+1)/takes.length * 50)}%`;
+      progFill.style.width = `${35+Math.round((i+1)/takes.length*40)}%`;
     }
 
-    // Крок 3: склеюємо через concat demuxer — без перекодування
+    // Крок 4: склейка
     progLabel.textContent = 'СКЛЕЙКА...';
-    progFill.style.width = '75%';
+    progFill.style.width = '78%';
 
-    const ext = takes[0].mimeType.includes('mp4') ? 'mp4' : 'webm';
-    const outMime = takes[0].mimeType;
+    const outExt = needsReencode ? 'mp4' : 'webm';
+    const outMime = needsReencode ? 'video/mp4' : takes[0].mimeType;
+    const outFile = `final.${outExt}`;
+    let finalData;
 
     if (processedNames.length === 1) {
-      // Один дубль — просто читаємо
-      const data = ffmpeg.FS('readFile', processedNames[0]);
-      const url = URL.createObjectURL(new Blob([data.buffer], { type: outMime }));
-      downloadFile(url, `TAKE_${Date.now()}.${ext}`);
+      finalData = ffmpeg.FS('readFile', processedNames[0]);
     } else {
-      // Concat list
       const listContent = processedNames.map(n => `file '${n}'`).join('\n');
       ffmpeg.FS('writeFile', 'list.txt', new TextEncoder().encode(listContent));
 
-      await ffmpeg.run(
-        '-f', 'concat',
-        '-safe', '0',
-        '-i', 'list.txt',
-        '-c', 'copy',
-        `output.${ext}`
-      );
+      const concatArgs = ['-f','concat','-safe','0','-i','list.txt','-c','copy'];
+      if (needsReencode) concatArgs.push('-movflags', '+faststart');
+      concatArgs.push(outFile);
+      await ffmpeg.run(...concatArgs);
 
+      finalData = ffmpeg.FS('readFile', outFile);
       try { ffmpeg.FS('unlink', 'list.txt'); } catch(e) {}
-
-      const data = ffmpeg.FS('readFile', `output.${ext}`);
-      const url = URL.createObjectURL(new Blob([data.buffer], { type: outMime }));
-      downloadFile(url, `TAKE_${Date.now()}.${ext}`);
-
-      try { ffmpeg.FS('unlink', `output.${ext}`); } catch(e) {}
+      try { ffmpeg.FS('unlink', outFile); } catch(e) {}
     }
 
-    // Очищення
+    if (!finalData || finalData.length < 1000) throw new Error('Результат порожній');
+
+    // Скачуємо
+    progFill.style.width = '95%';
+    progLabel.textContent = 'ЗБЕРЕЖЕННЯ...';
+    const url = URL.createObjectURL(new Blob([finalData.buffer], { type: outMime }));
+    downloadFile(url, `TAKE_${Date.now()}.${outExt}`);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+    // Очищення FS
+    inputNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e) {} });
     processedNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e) {} });
 
     progFill.style.width = '100%';
@@ -695,7 +720,6 @@ function downloadFile(url, filename) {
   const a = document.createElement('a');
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 // ── BLUETOOTH / КЛАВІАТУРА ──
