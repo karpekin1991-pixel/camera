@@ -779,41 +779,64 @@ async function startRender() {
     const ffmpeg = createFFmpeg({
       corePath: '/ffmpeg/ffmpeg-core.js', log: false,
       progress: ({ ratio }) => {
-        if (ratio > 0) { fill.style.width = `${50+ratio*44}%`; label.textContent = `РЕНДЕР ${Math.round(ratio*100)}%`; }
+        if (ratio > 0) {
+          fill.style.width = `${50 + ratio * 44}%`;
+          label.textContent = `РЕНДЕР ${Math.round(ratio * 100)}%`;
+        }
       }
     });
     await ffmpeg.load();
-    fill.style.width = '15%'; label.textContent = 'ЗАВАНТАЖЕННЯ ДУБЛІВ...';
+    fill.style.width = '15%';
+    label.textContent = 'ЗАВАНТАЖЕННЯ ДУБЛІВ...';
 
-    // Записуємо всі дублі у ffmpeg FS (завжди як .webm — вхідний формат)
-    const fileList = [];
+    // Записуємо всі дублі у ffmpeg FS
     for (let i = 0; i < takes.length; i++) {
-      const name = `take${i}.webm`;
-      ffmpeg.FS('writeFile', name, await fetchFile(takes[i].blob));
-      fileList.push(`file '${name}'`);
+      ffmpeg.FS('writeFile', `take${i}.webm`, await fetchFile(takes[i].blob));
       fill.style.width = `${15 + (i+1)/takes.length * 25}%`;
       label.textContent = `ДУБЛЬ ${i+1} з ${takes.length} ЗАВАНТАЖЕНО`;
     }
 
-    // Concat список
-    ffmpeg.FS('writeFile', 'list.txt', new TextEncoder().encode(fileList.join('\n')));
     fill.style.width = '42%';
-    label.textContent = 'СКЛЕЙКА І КОНВЕРТАЦІЯ В MP4...';
+    label.textContent = 'КОНВЕРТАЦІЯ В MP4...';
 
-    // Перекодуємо в h264/aac mp4 — це вирішує чорний екран і webm проблему
-    await ffmpeg.run(
-      '-f', 'concat',
-      '-safe', '0',
-      '-i', 'list.txt',
-      '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',  // розмір кратний 2 — вимога h264
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',   // максимальна швидкість кодування
-      '-crf', '23',             // якість (18=відмінна, 28=прийнятна)
-      '-c:a', 'aac',
-      '-b:a', '128k',
-      '-movflags', '+faststart', // mp4 оптимізований для стрімінгу
-      'output.mp4'
-    );
+    if (takes.length === 1) {
+      // Один дубль — просто конвертуємо
+      await ffmpeg.run(
+        '-i', 'take0.webm',
+        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-crf', '23',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-movflags', '+faststart',
+        'output.mp4'
+      );
+    } else {
+      // Кілька дублів — filter_complex concat
+      // Будуємо: -i take0.webm -i take1.webm ... -filter_complex "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]"
+      const inputs = [];
+      for (let i = 0; i < takes.length; i++) {
+        inputs.push('-i', `take${i}.webm`);
+      }
+      const streams = takes.map((_, i) => `[${i}:v][${i}:a]`).join('');
+      const filterComplex = `${streams}concat=n=${takes.length}:v=1:a=1[v][a]`;
+
+      await ffmpeg.run(
+        ...inputs,
+        '-filter_complex', filterComplex,
+        '-map', '[v]',
+        '-map', '[a]',
+        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-crf', '23',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-movflags', '+faststart',
+        'output.mp4'
+      );
+    }
 
     fill.style.width = '97%'; label.textContent = 'ЗБЕРЕЖЕННЯ...';
     const data = ffmpeg.FS('readFile', 'output.mp4');
@@ -823,20 +846,19 @@ async function startRender() {
 
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `final_${Date.now()}.mp4`;
+    a.href = url;
+    a.download = `final_${Date.now()}.mp4`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 10000);
 
-    // Очищаємо FS
     for (let i = 0; i < takes.length; i++) { try { ffmpeg.FS('unlink', `take${i}.webm`); } catch(e){} }
-    try { ffmpeg.FS('unlink','list.txt'); } catch(e){}
-    try { ffmpeg.FS('unlink','output.mp4'); } catch(e){}
+    try { ffmpeg.FS('unlink', 'output.mp4'); } catch(e){}
 
     progress.classList.remove('show');
     takes = []; hideFreezeFrame(); updateUI(); updateMemLabel(); showStatus('СКАЧАНО!');
   } catch(e) {
     console.error(e);
-    label.textContent = 'ПОМИЛКА: '+e.message;
+    label.textContent = 'ПОМИЛКА: ' + e.message;
     setTimeout(() => progress.classList.remove('show'), 4000);
   }
 }
