@@ -246,6 +246,25 @@
       </div>
     </div>
 
+    <!-- FPS -->
+    <div class="setting-row">
+      <div class="setting-label">FPS (КАДРИ/СЕК) <span id="fps-label">30 fps</span></div>
+      <div class="quality-grid">
+        <button class="quality-btn" data-fps="24" onclick="setFps(this)">
+          24<span class="quality-sub">кіно</span>
+        </button>
+        <button class="quality-btn active" data-fps="30" onclick="setFps(this)">
+          30<span class="quality-sub">стандарт</span>
+        </button>
+        <button class="quality-btn" data-fps="60" onclick="setFps(this)">
+          60<span class="quality-sub">плавно</span>
+        </button>
+        <button class="quality-btn" data-fps="120" onclick="setFps(this)">
+          120<span class="quality-sub">слоумо</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Аудіо бітрейт -->
     <div class="setting-row">
       <div class="setting-label">АУДІО БІТРЕЙТ <span id="audio-label">128 kbps</span></div>
@@ -263,6 +282,26 @@
         <span style="font-size:10px;opacity:0.4">10%</span>
         <input type="range" id="opacity-slider" min="10" max="70" step="5" value="35" oninput="setOpacity(this)">
         <span style="font-size:10px;opacity:0.4">70%</span>
+      </div>
+    </div>
+
+    <!-- Видалення тиші -->
+    <div class="setting-row">
+      <div class="toggle-row">
+        <span class="toggle-label">ВИДАЛИТИ ТИШУ НА КРАЯХ</span>
+        <div id="toggle-trim" class="toggle" onclick="toggleTrim()"></div>
+      </div>
+      <div id="trim-options" style="margin-top:14px;display:none">
+        <div class="setting-label">ПОРІГ ТИШІ <span id="trim-label">-40 dB</span></div>
+        <div class="slider-wrap">
+          <span style="font-size:10px;opacity:0.4">-60</span>
+          <input type="range" id="trim-slider" min="-60" max="-20" step="1" value="-40" oninput="setTrimThreshold(this)">
+          <span style="font-size:10px;opacity:0.4">-20</span>
+        </div>
+        <div style="font-size:10px;color:rgba(240,237,232,0.3);letter-spacing:1px;line-height:1.8;margin-top:8px">
+          -60 dB — видаляє майже все · -20 dB — тільки повна тиша<br>
+          Рекомендовано: -40 dB для звичайних умов
+        </div>
       </div>
     </div>
 
@@ -314,23 +353,84 @@ let deleteClickTimeout = null, deleteClickCount = 0;
 let facingMode = 'environment';
 let sessionMimeType = null;
 
-// Налаштування
+// Налаштування — завантажуємо з localStorage або дефолт
+const SETTINGS_KEY = 'take_app_settings';
 let settings = {
-  videoBitrate: 8_000_000,   // 8 Mbps
-  audioBitrate: 128_000,     // 128 kbps
+  videoBitrate: 8_000_000,
+  audioBitrate: 128_000,
   freezeOpacity: 0.35,
   mirrorBack: false,
   mirrorFront: true,
+  fps: 30,
+  trimSilence: false,
+  trimThreshold: -40,  // dB
 };
 
+function loadSettings() {
+  try {
+    const saved = localStorage.getItem(SETTINGS_KEY);
+    if (saved) Object.assign(settings, JSON.parse(saved));
+  } catch(e) {}
+}
+
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch(e) {}
+}
+
+function applySettingsToUI() {
+  // Якість
+  const mbps = settings.videoBitrate / 1_000_000;
+  document.querySelectorAll('.quality-btn[data-mbps]').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.mbps) === mbps);
+  });
+  document.getElementById('quality-label').textContent = `${mbps} Mbps`;
+  document.getElementById('mem-mbps').textContent = mbps;
+  document.getElementById('mem-per-min').textContent = Math.round(mbps * 60 / 8);
+
+  // FPS
+  document.querySelectorAll('.quality-btn[data-fps]').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.fps) === settings.fps);
+  });
+  document.getElementById('fps-label').textContent = `${settings.fps} fps`;
+
+  // Аудіо
+  const kbps = settings.audioBitrate / 1000;
+  document.getElementById('audio-slider').value = kbps;
+  document.getElementById('audio-label').textContent = `${kbps} kbps`;
+
+  // Прозорість
+  const pct = Math.round(settings.freezeOpacity * 100);
+  document.getElementById('opacity-slider').value = pct;
+  document.getElementById('opacity-label').textContent = `${pct}%`;
+
+  // Trim silence
+  document.getElementById('toggle-trim').classList.toggle('on', settings.trimSilence);
+  document.getElementById('trim-options').style.display = settings.trimSilence ? 'block' : 'none';
+  document.getElementById('trim-slider').value = settings.trimThreshold;
+  document.getElementById('trim-label').textContent = `${settings.trimThreshold} dB`;
+
+  // Тогли
+  document.getElementById('toggle-mirror-back').classList.toggle('on', settings.mirrorBack);
+  document.getElementById('toggle-mirror-front').classList.toggle('on', settings.mirrorFront);
+}
+
 // ── КАМЕРА ──
-async function init() { await startCamera(facingMode); }
+async function init() {
+  loadSettings();
+  applySettingsToUI();
+  await startCamera(facingMode);
+}
 
 async function startCamera(facing) {
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: facing, width:{ideal:1920}, height:{ideal:1080} },
+      video: {
+        facingMode: facing,
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: settings.fps, max: settings.fps }
+      },
       audio: true
     });
   } catch(e) {
@@ -400,11 +500,25 @@ function startRecording() {
     isRecording = false; isStopping = false;
     stopTimer(); showStatus('ПОМИЛКА — СПРОБУЙТЕ ЩЕ РАЗ'); updateUI();
   };
-  mediaRecorder.onstop = () => {
+  mediaRecorder.onstop = async () => {
     isStopping = false;
-    if (currentChunks.length > 0)
-      takes.push({ blob: new Blob(currentChunks, {type:recordMime}), duration: Date.now()-timerStart, mimeType:recordMime });
+    if (currentChunks.length === 0) { updateUI(); return; }
+
+    let blob = new Blob(currentChunks, { type: recordMime });
     currentChunks = [];
+
+    // Якщо увімкнено — аналізуємо аудіо і обрізаємо тишу
+    if (settings.trimSilence) {
+      showStatus('АНАЛІЗ ТИШІ...');
+      try {
+        blob = await trimSilenceFromBlob(blob, recordMime);
+      } catch(e) {
+        console.warn('Trim silence failed:', e);
+        // якщо не вдалось — зберігаємо оригінал
+      }
+    }
+
+    takes.push({ blob, duration: Date.now() - timerStart, mimeType: recordMime });
     showFreezeFrame();
     updateUI();
     updateMemLabel();
@@ -492,43 +606,153 @@ function openSettings() {
 function closeSettings() { document.getElementById('settings-overlay').classList.remove('show'); }
 
 function setQuality(btn) {
-  document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.quality-btn[data-mbps]').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   const mbps = parseInt(btn.dataset.mbps);
   settings.videoBitrate = mbps * 1_000_000;
-  sessionMimeType = null; // скидаємо щоб перевибрати кодек
-  document.getElementById('quality-label').textContent = `${btn.textContent.trim().split('\n')[0]} · ${mbps} Mbps`;
+  sessionMimeType = null;
+  document.getElementById('quality-label').textContent = `${mbps} Mbps`;
   document.getElementById('mem-mbps').textContent = mbps;
   document.getElementById('mem-per-min').textContent = Math.round(mbps * 60 / 8);
   updateMemLabel();
+  saveSettings();
+}
+
+function setFps(btn) {
+  document.querySelectorAll('.quality-btn[data-fps]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  settings.fps = parseInt(btn.dataset.fps);
+  document.getElementById('fps-label').textContent = `${settings.fps} fps`;
+  saveSettings();
+  // Перезапускаємо камеру з новим FPS (тільки якщо не пишемо)
+  if (!isRecording) startCamera(facingMode);
 }
 
 function setAudio(input) {
   settings.audioBitrate = parseInt(input.value) * 1000;
   document.getElementById('audio-label').textContent = `${input.value} kbps`;
+  saveSettings();
 }
 
 function setOpacity(input) {
   settings.freezeOpacity = parseInt(input.value) / 100;
   document.getElementById('opacity-label').textContent = `${input.value}%`;
   document.getElementById('freeze-canvas').style.opacity = settings.freezeOpacity;
+  saveSettings();
 }
 
 function toggleMirrorBack() {
   settings.mirrorBack = !settings.mirrorBack;
   document.getElementById('toggle-mirror-back').classList.toggle('on', settings.mirrorBack);
   if (facingMode === 'environment') applyMirror();
+  saveSettings();
 }
 function toggleMirrorFront() {
   settings.mirrorFront = !settings.mirrorFront;
   document.getElementById('toggle-mirror-front').classList.toggle('on', settings.mirrorFront);
   if (facingMode === 'user') applyMirror();
+  saveSettings();
 }
 
 function updateMemLabel() {
   const totalBytes = takes.reduce((sum, t) => sum + t.blob.size, 0);
   const mb = (totalBytes / 1_000_000).toFixed(1);
   document.getElementById('mem-label').textContent = `${mb} MB`;
+}
+
+// ── АНАЛІЗ ТИШІ ──
+// Декодуємо аудіо через Web Audio API, знаходимо межі де є звук,
+// потім через ffmpeg обрізаємо відео по цих часових мітках
+async function trimSilenceFromBlob(blob, mimeType) {
+  // 1. Декодуємо аудіо
+  const arrayBuffer = await blob.arrayBuffer();
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  let audioBuffer;
+  try {
+    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+  } finally {
+    audioCtx.close();
+  }
+
+  // 2. Змішуємо всі канали в моно і знаходимо межі
+  const threshold = Math.pow(10, settings.trimThreshold / 20); // dB -> амплітуда
+  const sampleRate = audioBuffer.sampleRate;
+  const numChannels = audioBuffer.numberOfChannels;
+  const length = audioBuffer.length;
+
+  // Знаходимо перший семпл вище порогу
+  let startSample = 0;
+  outer1: for (let i = 0; i < length; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      if (Math.abs(audioBuffer.getChannelData(ch)[i]) > threshold) {
+        startSample = i;
+        break outer1;
+      }
+    }
+  }
+
+  // Знаходимо останній семпл вище порогу
+  let endSample = length - 1;
+  outer2: for (let i = length - 1; i >= 0; i--) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      if (Math.abs(audioBuffer.getChannelData(ch)[i]) > threshold) {
+        endSample = i;
+        break outer2;
+      }
+    }
+  }
+
+  const startSec = startSample / sampleRate;
+  const endSec = endSample / sampleRate;
+  const totalSec = length / sampleRate;
+
+  // Якщо тиші менше 0.1с з обох боків — не варто різати
+  if (startSec < 0.1 && (totalSec - endSec) < 0.1) return blob;
+
+  // Невелика "подушка" щоб не обрізати занадто різко
+  const padStart = Math.max(0, startSec - 0.05);
+  const padEnd = Math.min(totalSec, endSec + 0.05);
+
+  console.log(`Trim: ${padStart.toFixed(2)}s → ${padEnd.toFixed(2)}s (з ${totalSec.toFixed(2)}s)`);
+
+  // 3. Обрізаємо через ffmpeg
+  const { createFFmpeg, fetchFile } = FFmpeg;
+  const ff = createFFmpeg({ corePath: '/ffmpeg/ffmpeg-core.js', log: false });
+  await ff.load();
+
+  const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+  ff.FS('writeFile', `input.${ext}`, await fetchFile(blob));
+
+  await ff.run(
+    '-i', `input.${ext}`,
+    '-ss', String(padStart),
+    '-to', String(padEnd),
+    '-c', 'copy',
+    `trimmed.${ext}`
+  );
+
+  const data = ff.FS('readFile', `trimmed.${ext}`);
+  const trimmedBlob = new Blob([data.buffer], { type: mimeType });
+
+  try { ff.FS('unlink', `input.${ext}`); } catch(e) {}
+  try { ff.FS('unlink', `trimmed.${ext}`); } catch(e) {}
+
+  // Повертаємо обрізаний blob тільки якщо він не порожній
+  return trimmedBlob.size > 1000 ? trimmedBlob : blob;
+}
+
+// ── СЕТТЕРИ TRIM ──
+function toggleTrim() {
+  settings.trimSilence = !settings.trimSilence;
+  document.getElementById('toggle-trim').classList.toggle('on', settings.trimSilence);
+  document.getElementById('trim-options').style.display = settings.trimSilence ? 'block' : 'none';
+  saveSettings();
+}
+
+function setTrimThreshold(input) {
+  settings.trimThreshold = parseInt(input.value);
+  document.getElementById('trim-label').textContent = `${input.value} dB`;
+  saveSettings();
 }
 
 // ── РЕНДЕР ──
