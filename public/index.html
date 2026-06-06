@@ -15,7 +15,7 @@
   #video.mirrored { transform:scaleX(-1); }
 
   #freeze-canvas { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; display:none; z-index:2; opacity:0.35; filter:grayscale(100%); }
-  #pause-overlay { position:fixed; inset:0; background:rgba(10,10,10,0.25); opacity:0; pointer-events:none; transition:opacity 0.2s ease; z-index:3; }
+  #pause-overlay { position:fixed; inset:0; background:rgba(10,10,10,0.25); opacity:0; pointer-events:none; transition:opacity 0.25s ease; z-index:3; }
   #pause-overlay.active { opacity:1; }
 
   #rec-badge { position:fixed; top:20px; left:20px; display:flex; align-items:center; gap:8px; z-index:20; opacity:0; transition:opacity 0.2s; }
@@ -121,7 +121,7 @@
 
 <div id="bottom-bar">
   <div id="left-btns">
-    <div id="btn-delete" class="action-btn disabled" onclick="_handleDelete()">
+    <div id="btn-delete" class="action-btn disabled" onclick="handleDelete()">
       <div class="icon-wrap">
         <div class="btn-icon">
           <div id="delete-count-badge">2</div>
@@ -150,7 +150,7 @@
       </div>
       <span class="btn-label">КАМЕРА</span>
     </div>
-    <div id="btn-edit" class="action-btn disabled" onclick="_openModal()">
+    <div id="btn-edit" class="action-btn disabled" onclick="openModal()">
       <div class="btn-icon">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
       </div>
@@ -214,14 +214,14 @@
         <div id="toggle-trim" class="toggle" onclick="toggleTrim()"></div>
       </div>
       <div id="trim-options" style="margin-top:14px;display:none">
-        <div class="setting-label">ЧУТЛИВІСТЬ ГОЛОСУ (RMS) <span id="trim-label">0.05</span></div>
+        <div class="setting-label">ПОРІГ ТИШІ <span id="trim-label">-40 dB</span></div>
         <div class="slider-wrap">
-          <span style="font-size:10px;opacity:0.4">0.01</span>
-          <input type="range" id="trim-slider" min="1" max="20" step="1" value="5" oninput="setTrimThreshold(this)">
-          <span style="font-size:10px;opacity:0.4">0.20</span>
+          <span style="font-size:10px;opacity:0.4">-60</span>
+          <input type="range" id="trim-slider" min="-60" max="-20" step="1" value="-40" oninput="setTrimThreshold(this)">
+          <span style="font-size:10px;opacity:0.4">-20</span>
         </div>
         <div style="font-size:10px;color:rgba(240,237,232,0.3);letter-spacing:1px;line-height:1.8;margin-top:8px">
-          Браузерний аналіз амплітуди. Менше значення — чутливіше до тихих звуків. Рекомендовано: 0.05.
+          Аналіз під час монтажу. -40 dB — рекомендовано.
         </div>
       </div>
     </div>
@@ -249,6 +249,7 @@
 <script src="/ffmpeg/ffmpeg.min.js"></script>
 <script>
 
+// ── IndexedDB — зберігання дублів на диск замість RAM ──
 const DB_NAME = 'TakeAppDB_v2';
 const STORE_NAME = 'takes_store';
 
@@ -305,11 +306,12 @@ async function dbClearAll() {
   return new Promise(r => tx.oncomplete = r);
 }
 
+// ── СТАН ──
 let stream = null, mediaRecorder = null;
 let currentChunks = [];
 let isRecording = false, isStopping = false;
 let timerInterval = null, timerStart = 0;
-let deleteClickCount = 0;
+let deleteClickTimeout = null, deleteClickCount = 0;
 let facingMode = 'environment';
 let sessionMimeType = null;
 let ffmpegInstance = null, isFFmpegLoading = false;
@@ -321,17 +323,11 @@ let S = {
   freezeOpacity: 0.35,
   fps: 30,
   trimSilence: false,
-  trimThreshold: 0.05, 
+  trimThreshold: -40,
 };
 
 function loadSettings() {
-  try { 
-    const s = localStorage.getItem(SETTINGS_KEY); 
-    if (s) {
-      Object.assign(S, JSON.parse(s));
-      if (S.trimThreshold < 0) S.trimThreshold = 0.05;
-    }
-  } catch(e) {}
+  try { const s = localStorage.getItem(SETTINGS_KEY); if (s) Object.assign(S, JSON.parse(s)); } catch(e) {}
 }
 function saveSettings() {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(S)); } catch(e) {}
@@ -355,8 +351,8 @@ async function applySettingsToUI() {
   document.getElementById('opacity-label').textContent = `${Math.round(S.freezeOpacity*100)}%`;
   document.getElementById('toggle-trim').classList.toggle('on', S.trimSilence);
   document.getElementById('trim-options').style.display = S.trimSilence ? 'block' : 'none';
-  document.getElementById('trim-slider').value = S.trimThreshold * 100;
-  document.getElementById('trim-label').textContent = S.trimThreshold.toFixed(2);
+  document.getElementById('trim-slider').value = S.trimThreshold;
+  document.getElementById('trim-label').textContent = `${S.trimThreshold} dB`;
   await updateMemLabel();
 }
 
@@ -371,7 +367,7 @@ function setFps(btn) { S.fps = parseInt(btn.dataset.fps); saveSettings(); applyS
 function setAudio(input) { S.audioBitrate = parseInt(input.value)*1000; document.getElementById('audio-label').textContent=`${input.value} kbps`; saveSettings(); }
 function setOpacity(input) { S.freezeOpacity=parseInt(input.value)/100; document.getElementById('opacity-label').textContent=`${input.value}%`; document.getElementById('freeze-canvas').style.opacity=S.freezeOpacity; saveSettings(); }
 function toggleTrim() { S.trimSilence=!S.trimSilence; document.getElementById('toggle-trim').classList.toggle('on',S.trimSilence); document.getElementById('trim-options').style.display=S.trimSilence?'block':'none'; saveSettings(); }
-function setTrimThreshold(input) { S.trimThreshold=parseInt(input.value)/100; document.getElementById('trim-label').textContent=S.trimThreshold.toFixed(2); saveSettings(); }
+function setTrimThreshold(input) { S.trimThreshold=parseInt(input.value); document.getElementById('trim-label').textContent=`${input.value} dB`; saveSettings(); }
 function openSettings() { updateMemLabel().then(()=>document.getElementById('settings-overlay').classList.add('show')); }
 function closeSettings() { document.getElementById('settings-overlay').classList.remove('show'); }
 function showStatus(msg) { document.getElementById('status-msg').textContent = msg; }
@@ -410,6 +406,7 @@ async function initFFmpeg() {
   }
   isFFmpegLoading = true;
   const { createFFmpeg } = FFmpeg;
+  // Локальний ffmpeg з /ffmpeg/ папки
   ffmpegInstance = createFFmpeg({ log: false, corePath: '/ffmpeg/ffmpeg-core.js' });
   try { await ffmpegInstance.load(); }
   catch(e) { console.error('FFmpeg load error:', e); ffmpegInstance = null; }
@@ -421,6 +418,7 @@ async function init() {
   loadSettings();
   await applySettingsToUI();
   await startCamera(facingMode);
+  // Фонове завантаження ffmpeg
   initFFmpeg();
 }
 
@@ -450,12 +448,7 @@ async function flipCamera() {
 
 function getSessionMimeType() {
   if (sessionMimeType) return sessionMimeType;
-  const types = [
-    'video/webm;codecs=h264,opus',
-    'video/mp4;codecs=avc1,mp4a',
-    'video/webm;codecs=vp8,opus',
-    'video/webm'
-  ];
+  const types = ['video/webm;codecs=vp8,opus','video/webm;codecs=vp9,opus','video/webm'];
   sessionMimeType = types.find(t => MediaRecorder.isTypeSupported(t)) || '';
   return sessionMimeType;
 }
@@ -493,6 +486,7 @@ function startRecording() {
     showFreezeFrame();
     await updateUI();
   };
+  // 1000мс — зменшує навантаження на CPU в 100 разів порівняно з 10мс
   mediaRecorder.start(1000);
   isRecording = true;
   timerStart = Date.now();
@@ -503,7 +497,7 @@ function startRecording() {
 function stopRecording() {
   if (mediaRecorder?.state === 'recording') {
     isStopping = true;
-    mediaRecorder.requestData();
+    mediaRecorder.requestData(); // зберігаємо останній шматок
     mediaRecorder.stop();
   }
   isRecording = false;
@@ -517,238 +511,274 @@ function showFreezeFrame() {
   canvas.height = video.videoHeight || window.innerHeight;
   const ctx = canvas.getContext('2d');
   if (facingMode === 'user') {
-    ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1);
+    ctx.save(); ctx.translate(canvas.width,0); ctx.scale(-1,1);
+    ctx.drawImage(video,0,0,canvas.width,canvas.height); ctx.restore();
+  } else {
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
   }
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  canvas.style.opacity = S.freezeOpacity;
   canvas.style.display = 'block';
   document.getElementById('pause-overlay').classList.add('active');
 }
-
 function hideFreezeFrame() {
   document.getElementById('freeze-canvas').style.display = 'none';
   document.getElementById('pause-overlay').classList.remove('active');
 }
 
-function startTimer() {
-  clearInterval(timerInterval);
-  const el = document.getElementById('timer');
-  timerInterval = setInterval(() => {
-    const diff = Math.floor((Date.now() - timerStart) / 1000);
-    const m = String(Math.floor(diff/60)).padStart(2,'0');
-    const s = String(diff%60).padStart(2,'0');
-    el.textContent = `${m}:${s}`;
-  }, 500);
+function startTimer() { clearInterval(timerInterval); timerInterval=setInterval(updateTimer,500); updateTimer(); }
+function stopTimer() { clearInterval(timerInterval); document.getElementById('timer').textContent='00:00'; }
+function updateTimer() {
+  const s = Math.floor((Date.now()-timerStart)/1000);
+  document.getElementById('timer').textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
 }
 
-function stopTimer() {
-  clearInterval(timerInterval);
-  document.getElementById('timer').textContent = '00:00';
-}
+// Обгортка для onclick — async функції не викликаються з onclick напряму
+function handleDelete() { _handleDelete(); }
+function openModal() { _openModal(); }
 
-function _handleDelete() {
+async function _handleDelete() {
   if (isRecording) return;
+  const list = await dbGetTakes();
+  if (!list.length) return;
   deleteClickCount++;
+  clearTimeout(deleteClickTimeout);
   if (deleteClickCount === 1) {
-    setTimeout(async () => {
+    if (list.length >= 2) document.getElementById('delete-hint').classList.add('show');
+    deleteClickTimeout = setTimeout(async () => {
       if (deleteClickCount === 1) {
         await dbDeleteLastTake();
-        await updateUI();
-        hideFreezeFrame();
+        const updated = await dbGetTakes();
+        if (updated.length > 0) showFreezeFrame(); else hideFreezeFrame();
+        await updateUI(); showStatus('ДУБЛЬ ВИДАЛЕНО');
       }
       deleteClickCount = 0;
-    }, 300);
-  } else if (deleteClickCount === 2) {
-    deleteClickCount = 0;
-    const hint = document.getElementById('delete-hint');
-    dbGetTakes().then(takes => {
-      const n = Math.min(takes.length, 2);
-      hint.textContent = `${n}× — ВИДАЛЕНО ${n} ${pluralTake(n)}`;
-      hint.classList.add('show');
-      setTimeout(() => hint.classList.remove('show'), 2000);
-      dbDeleteLastN(2).then(() => updateUI().then(hideFreezeFrame));
-    });
+      document.getElementById('delete-hint').classList.remove('show');
+    }, 400);
+  } else if (deleteClickCount >= 2) {
+    clearTimeout(deleteClickTimeout); deleteClickCount = 0;
+    document.getElementById('delete-hint').classList.remove('show');
+    const n = Math.min(2, list.length);
+    await dbDeleteLastN(n);
+    const updated = await dbGetTakes();
+    if (updated.length > 0) showFreezeFrame(); else hideFreezeFrame();
+    await updateUI(); showStatus(`ВИДАЛЕНО ${n} ДУБЛІ`);
   }
 }
 
-function _openModal() {
-  if (isRecording) return;
-  dbGetTakes().then(takes => {
-    if(!takes.length) return;
-    const count = takes.length;
-    document.getElementById('modal-desc').textContent = `У вас є ${count} ${pluralTake(count)}. Вони будуть об'єднані в хронологічному порядку.`;
-    document.getElementById('modal-takes').innerHTML = takes.map((_,i) => `<div class="modal-take-chip">Дубль ${i+1}</div>`).join('');
-    document.getElementById('modal-overlay').classList.add('show');
-  });
+async function _openModal() {
+  if (isRecording) stopRecording();
+  const list = await dbGetTakes();
+  document.getElementById('modal-desc').textContent = `${list.length} ${pluralTake(list.length)} будуть склеєні в одне відео`;
+  document.getElementById('modal-takes').innerHTML = list.map((t,i) =>
+    `<div class="modal-take-chip">ДУБЛЬ ${i+1} · ${(t.blob.size/1000000).toFixed(1)}MB</div>`
+  ).join('');
+  document.getElementById('modal-overlay').classList.add('show');
 }
 
-function closeModal() {
-  document.getElementById('modal-overlay').classList.remove('show');
-}
+// Виправлено: прибрано помилковий .remove('remove')
+function closeModal() { document.getElementById('modal-overlay').classList.remove('show'); }
 
-async function analyzeAudioSilence(blob, threshold) {
-  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  const arrayBuffer = await blob.arrayBuffer();
-  
+// ── АНАЛІЗ ТИШІ через ffmpeg (швидко, мало RAM) ──
+// Витягуємо тільки аудіо в WAV 16kHz mono через ffmpeg — набагато швидше
+// ніж Web Audio API декодування повного blob
+async function analyzeAudioBoundsFFmpeg(ffmpeg, inName) {
+  const wavName = inName.replace('.webm', '_a.wav');
   try {
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    const channelData = audioBuffer.getChannelData(0); 
-    const sampleRate = audioBuffer.sampleRate;
-    const totalSamples = channelData.length;
-    const duration = audioBuffer.duration;
+    // Витягуємо тільки аудіо: mono, 16kHz, PCM — мінімум даних для аналізу
+    await ffmpeg.run(
+      '-i', inName,
+      '-vn',           // без відео
+      '-ar', '16000',  // 16kHz достатньо для детекції пауз
+      '-ac', '1',      // mono
+      '-c:a', 'pcm_s16le',
+      wavName
+    );
 
-    const windowSize = Math.floor(sampleRate * 0.02); 
-    let startTime = 0;
-    let endTime = duration;
+    const wavData = ffmpeg.FS('readFile', wavName);
+    try { ffmpeg.FS('unlink', wavName); } catch(e) {}
 
-    for (let i = 0; i < totalSamples; i += windowSize) {
-      let sum = 0;
-      let count = 0;
-      for (let j = i; j < i + windowSize && j < totalSamples; j++) {
-        sum += channelData[j] * channelData[j];
-        count++;
-      }
-      const rms = Math.sqrt(sum / count);
-      if (rms >= threshold) {
-        startTime = i / sampleRate;
-        break;
-      }
-    }
+    // Декодуємо WAV через Web Audio — тепер це маленький файл (16kHz mono)
+    const aCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    let decoded;
+    try { decoded = await aCtx.decodeAudioData(wavData.buffer); }
+    finally { try { aCtx.close(); } catch(e) {} }
 
-    for (let i = totalSamples - windowSize; i >= 0; i -= windowSize) {
-      let sum = 0;
-      let count = 0;
-      for (let j = i; j < i + windowSize && j < totalSamples; j++) {
-        sum += channelData[j] * channelData[j];
-        count++;
-      }
-      const rms = Math.sqrt(sum / count);
-      if (rms >= threshold) {
-        endTime = (i + windowSize) / sampleRate;
-        break;
-      }
-    }
+    const data = decoded.getChannelData(0);
+    const sr = decoded.sampleRate;
+    const len = data.length;
+    const total = len / sr;
+    const threshold = Math.pow(10, S.trimThreshold / 20);
 
-    await audioCtx.close();
-    if (startTime >= endTime) { startTime = 0; endTime = duration; }
-    
-    startTime = Math.max(0, startTime - 0.1);
-    endTime = Math.min(duration, endTime + 0.1);
+    let startSample = 0;
+    for (let i = 0; i < len; i++) { if (Math.abs(data[i]) > threshold) { startSample = i; break; } }
+    let endSample = len - 1;
+    for (let i = len - 1; i >= 0; i--) { if (Math.abs(data[i]) > threshold) { endSample = i; break; } }
 
-    return { startTime, endTime };
-  } catch (e) {
-    await audioCtx.close();
-    return { startTime: 0, endTime: 0 };
+    const start = Math.max(0, startSample / sr - 0.05);
+    const end = Math.min(total, endSample / sr + 0.05);
+    if (start < 0.15 && (total - end) < 0.15) return null;
+    return { start, end };
+  } catch(e) {
+    console.warn('Audio analysis failed:', e);
+    return null;
   }
 }
 
+// ── РЕНДЕР — один прохід ffmpeg, оптимізована пам'ять ──
 async function startRender() {
   closeModal();
-  const takes = await dbGetTakes();
-  if (!takes.length) return;
+  const progWindow = document.getElementById('render-progress');
+  const progFill = document.getElementById('progress-fill');
+  const progLabel = document.getElementById('render-label');
+  progWindow.classList.add('show');
+  progFill.style.width = '0%';
 
-  const pr = document.getElementById('render-progress');
-  const fill = document.getElementById('progress-fill');
-  const lbl = document.getElementById('render-label');
-  
-  pr.classList.add('show');
-  fill.style.width = '0%';
+  const takesList = await dbGetTakes();
+  if (!takesList.length) { progWindow.classList.remove('show'); return; }
 
+  progLabel.textContent = 'ЗАВАНТАЖЕННЯ FFMPEG...';
   const ffmpeg = await initFFmpeg();
   if (!ffmpeg) {
-    alert('Помилка запуску FFmpeg.');
-    pr.classList.remove('show');
+    progLabel.textContent = 'ПОМИЛКА: FFmpeg не завантажено';
+    setTimeout(() => progWindow.classList.remove('show'), 3000);
     return;
   }
 
+  const inputNames = [];
+
   try {
-    // Автоматично вибираємо розширення та кодеки на основі вихідного запису пристрою
-    const isMp4 = takes[0].mimeType.includes('mp4');
-    const ext = isMp4 ? 'mp4' : 'webm';
-    const audioCodec = isMp4 ? 'aac' : 'libopus';
-    
-    let concatListContent = '';
-    
-    for (let i = 0; i < takes.length; i++) {
-      lbl.textContent = `АНАЛІЗ АУДІО ДУБЛЯ ${i + 1} З ${takes.length}...`;
-      fill.style.width = `${Math.round((i / takes.length) * 40)}%`;
-
-      const inputName = `input_${i}.${ext}`;
-      const processedName = `processed_${i}.${ext}`;
-      
-      const buffer = await takes[i].blob.arrayBuffer();
-      ffmpeg.FS('writeFile', inputName, new Uint8Array(buffer));
-
-      if (S.trimSilence) {
-        const bounds = await analyzeAudioSilence(takes[i].blob, S.trimThreshold);
-        lbl.textContent = `ЗРІЗ ТИШІ ДУБЛЯ ${i + 1} (${bounds.startTime.toFixed(2)}с - ${bounds.endTime.toFixed(2)}с)...`;
-        
-        // Виправлено: правильний енкодер замість фільтру у параметрі -c:a, та виправлений таймінг
-        await ffmpeg.run(
-          '-i', inputName,
-          '-ss', `${bounds.startTime}`, 
-          '-to', `${bounds.endTime}`, 
-          '-c:v', 'copy', 
-          '-c:a', audioCodec, 
-          '-af', 'aresample=async=1', 
-          processedName
-        );
-      } else {
-        await ffmpeg.run('-i', inputName, '-c', 'copy', processedName);
-      }
-
-      concatListContent += `file '${processedName}'\n`;
+    // Крок 1: завантажуємо всі дублі у ffmpeg FS
+    progLabel.textContent = 'ЗАВАНТАЖЕННЯ ДУБЛІВ...';
+    for (let i = 0; i < takesList.length; i++) {
+      const name = `in_${i}.webm`;
+      ffmpeg.FS('writeFile', name, new Uint8Array(await takesList[i].blob.arrayBuffer()));
+      inputNames.push(name);
+      progFill.style.width = `${Math.round((i+1)/takesList.length*20)}%`;
     }
 
-    lbl.textContent = 'ОДНОПРОХІДНА СКЛЕЙКА ВСІХ ФРАГМЕНТІВ...';
-    fill.style.width = '80%';
+    // Крок 2: аналіз тиші через ffmpeg (якщо увімкнено)
+    // Аналізуємо вже після завантаження — ffmpeg читає з FS, не з RAM
+    const trimBounds = [];
+    if (S.trimSilence) {
+      for (let i = 0; i < inputNames.length; i++) {
+        progLabel.textContent = `АНАЛІЗ ТИШІ ${i+1}/${inputNames.length}...`;
+        progFill.style.width = `${20 + Math.round((i+1)/inputNames.length*20)}%`;
+        trimBounds.push(await analyzeAudioBoundsFFmpeg(ffmpeg, inputNames[i]));
+      }
+    } else {
+      inputNames.forEach(() => trimBounds.push(null));
+    }
 
-    ffmpeg.FS('writeFile', 'concat_list.txt', new TextEncoder().encode(concatListContent));
+    // Крок 3: один прохід ffmpeg — trim + concat + encode
+    // Ідея з тієї програми: filter_complex будує всі сегменти за один запуск
+    progLabel.textContent = 'КОДУВАННЯ MP4...';
+    progFill.style.width = '42%';
 
-    const outputName = `output.${ext}`;
-    await ffmpeg.run(
-      '-f', 'concat', 
-      '-safe', '0', 
-      '-i', 'concat_list.txt', 
-      '-c:v', 'copy', 
-      '-c:a', 'copy', 
-      outputName
+    ffmpeg.setProgress(({ ratio }) => {
+      if (ratio > 0) {
+        progFill.style.width = `${42 + Math.round(ratio * 52)}%`;
+        progLabel.textContent = `РЕНДЕР ${Math.round(ratio * 100)}%`;
+      }
+    });
+
+    const filterParts = [];
+    for (let i = 0; i < takesList.length; i++) {
+      const b = trimBounds[i];
+      if (b) {
+        const ss = b.start.toFixed(3);
+        const ee = b.end.toFixed(3);
+        filterParts.push(`[${i}:v]trim=${ss}:${ee},setpts=PTS-STARTPTS[v${i}]`);
+        filterParts.push(`[${i}:a]atrim=${ss}:${ee},asetpts=PTS-STARTPTS[a${i}]`);
+      } else {
+        filterParts.push(`[${i}:v]setpts=PTS-STARTPTS[v${i}]`);
+        filterParts.push(`[${i}:a]aresample[a${i}]`);
+      }
+    }
+    const concatIn = takesList.map((_,i) => `[v${i}][a${i}]`).join('');
+    filterParts.push(`${concatIn}concat=n=${takesList.length}:v=1:a=1[vout][aout]`);
+
+    const args = [];
+    inputNames.forEach(n => args.push('-i', n));
+    args.push(
+      '-filter_complex', filterParts.join(';'),
+      '-map', '[vout]',
+      '-map', '[aout]',
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-crf', '23',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      '-b:a', `${S.audioBitrate}`,
+      '-movflags', '+faststart',
+      'output.mp4'
     );
 
-    fill.style.width = '100%';
-    lbl.textContent = 'ЗБЕРЕЖЕННЯ ВІДЕО...';
+    await ffmpeg.run(...args);
 
-    const data = ffmpeg.FS('readFile', outputName);
-    const outBlob = new Blob([data.buffer], { type: isMp4 ? 'video/mp4' : 'video/webm' });
-    const url = URL.createObjectURL(outBlob);
+    // Правильний порядок звільнення пам'яті (з тієї програми):
+    // 1. Спочатку видаляємо вхідні файли (~найбільші)
+    inputNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e){} });
+    inputNames.length = 0;
 
+    // 2. Даємо GC дихнути
+    await new Promise(r => setTimeout(r, 50));
+
+    // 3. Читаємо output
+    progLabel.textContent = 'ЗБЕРЕЖЕННЯ...';
+    progFill.style.width = '96%';
+    const data = ffmpeg.FS('readFile', 'output.mp4');
+    if (!data || data.length < 1000) throw new Error('Файл порожній');
+
+    // 4. Одразу видаляємо output з FS
+    try { ffmpeg.FS('unlink', 'output.mp4'); } catch(e) {}
+
+    // 5. Ще один yield
+    await new Promise(r => setTimeout(r, 50));
+
+    // 6. Скачуємо
+    const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `TAKE_${Date.now()}.${ext}`;
-    a.click();
-
-    // Очищення пам'яті FS FFmpeg
-    takes.forEach((_, i) => {
-      try { ffmpeg.FS('unlink', `input_${i}.${ext}`); } catch(e){}
-      try { ffmpeg.FS('unlink', `processed_${i}.${ext}`); } catch(e){}
-    });
-    try { ffmpeg.FS('unlink', 'concat_list.txt'); } catch(e){}
-    try { ffmpeg.FS('unlink', outputName); } catch(e){}
+    a.href = url; a.download = `TAKE_${Date.now()}.mp4`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
 
     await dbClearAll();
+    progFill.style.width = '100%';
+    progLabel.textContent = 'ГОТОВО!';
+    await new Promise(r => setTimeout(r, 600));
+
     hideFreezeFrame();
     await updateUI();
+    showStatus('ВІДЕО ЗБЕРЕЖЕНО!');
 
-    setTimeout(() => pr.classList.remove('show'), 600);
-
-  } catch (err) {
-    console.error(err);
-    alert('Помилка монтажу. Подробиці в консолі.');
-    pr.classList.remove('show');
+  } catch(err) {
+    console.error('Render error:', err);
+    // Очищення при помилці
+    inputNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e){} });
+    try { ffmpeg.FS('unlink', 'output.mp4'); } catch(e) {}
+    progLabel.textContent = 'ПОМИЛКА: ' + err.message;
+    await new Promise(r => setTimeout(r, 4000));
+  } finally {
+    progWindow.classList.remove('show');
   }
 }
 
-window.addEventListener('DOMContentLoaded', init);
+// ── BLUETOOTH / КЛАВІАТУРА ──
+const TRIGGER_KEYS = new Set([' ','Enter','ArrowUp','ArrowDown','MediaPlayPause','MediaPlay','MediaPause','VolumeUp','VolumeDown','F5','F8','PageUp','PageDown']);
+document.addEventListener('keydown', e => { if (TRIGGER_KEYS.has(e.key)) { e.preventDefault(); handleRecord(); } });
+let gamepadPolling = false;
+window.addEventListener('gamepadconnected', () => {
+  if (gamepadPolling) return; gamepadPolling = true;
+  let prev = {};
+  setInterval(() => {
+    for (const gp of navigator.getGamepads()) {
+      if (!gp) continue;
+      gp.buttons.forEach((btn,i) => { const k=gp.index+'_'+i; if(btn.pressed&&!prev[k]) handleRecord(); prev[k]=btn.pressed; });
+    }
+  }, 100);
+});
+
+window.onload = init;
 </script>
 </body>
 </html>
