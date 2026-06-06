@@ -722,73 +722,66 @@ async function startRender() {
       inputNames.forEach(() => trimBounds.push(null));
     }
 
-    // Крок 3: обробляємо кожен дубль
-    // Chrome MediaRecorder пише WebM з Duration:N/A і 1000fps у заголовку.
-    // Це викликає лаги при відтворенні. Виправляємо через remux з явним -r fps.
-    // Одночасно обрізаємо тишу якщо є.
-    progLabel.textContent = 'ОБРОБКА ДУБЛІВ...';
 
-    for (let i = 0; i < inputNames.length; i++) {
-      const b = trimBounds[i];
-      const outName = `proc_${i}.webm`;
-      const fps = String(S.fps);
+    // Кроки 3+4: ОДИН прохід ffmpeg через filter_complex
+    // Чому не -ss: webm з Duration:N/A не має keyframe index —
+    // -ss пропускає всі кадри до першого keyframe і дає 0 відеокадрів.
+    // filter_complex trim декодує всі кадри і вирізає точно по часу.
+    // libvpx перекодує VP8→VP8 і виправляє 1000fps у метаданих.
+    progLabel.textContent = 'РЕНДЕР...';
+    progFill.style.width = '52%';
 
-      if (b) {
-        addRenderLog(`[TRIM] ${inputNames[i]}: від ${b.start.toFixed(3)}с тривалість ${(b.end-b.start).toFixed(3)}с`);
-        // Remux з правильним fps + trim одним проходом
-        await ffmpeg.run(
-          '-i', inputNames[i],
-          '-ss', b.start.toFixed(3),
-          '-t', (b.end - b.start).toFixed(3),
-          '-c:v', 'copy',
-          '-c:a', 'copy',
-          '-r', fps,           // виправляємо 1000fps → реальний fps
-          '-vsync', 'cfr',     // constant frame rate — прибирає дубльовані кадри
-          outName
-        );
-      } else {
-        addRenderLog(`[TRIM] ${inputNames[i]}: тільки remux з fps=${fps}`);
-        await ffmpeg.run(
-          '-i', inputNames[i],
-          '-c:v', 'copy',
-          '-c:a', 'copy',
-          '-r', fps,
-          '-vsync', 'cfr',
-          outName
-        );
+    ffmpeg.setProgress(({ ratio }) => {
+      if (ratio > 0) {
+        progFill.style.width = `${52 + Math.round(ratio * 40)}%`;
+        progLabel.textContent = `РЕНДЕР ${Math.round(ratio * 100)}%`;
       }
+    });
 
-      processedNames.push(outName);
-      try { ffmpeg.FS('unlink', inputNames[i]); } catch(e) {}
-      progFill.style.width = `${50 + Math.round((i+1)/inputNames.length*35)}%`;
+    const filterParts = [];
+    for (let i = 0; i < takesList.length; i++) {
+      const b = trimBounds[i];
+      if (b) {
+        const ss = b.start.toFixed(3);
+        const ee = b.end.toFixed(3);
+        filterParts.push(`[${i}:v]trim=${ss}:${ee},setpts=PTS-STARTPTS,fps=${S.fps}[v${i}]`);
+        filterParts.push(`[${i}:a]atrim=${ss}:${ee},asetpts=PTS-STARTPTS[a${i}]`);
+        addRenderLog(`[FILTER] дубль ${i}: trim ${ss}→${ee}с`);
+      } else {
+        filterParts.push(`[${i}:v]fps=${S.fps},setpts=PTS-STARTPTS[v${i}]`);
+        filterParts.push(`[${i}:a]asetpts=PTS-STARTPTS[a${i}]`);
+        addRenderLog(`[FILTER] дубль ${i}: fps fix, без trim`);
+      }
     }
+    const concatIn = takesList.map((_, i) => `[v${i}][a${i}]`).join('');
+    filterParts.push(`${concatIn}concat=n=${takesList.length}:v=1:a=1[vout][aout]`);
 
-    // Крок 4: склейка через concat demuxer
-    progLabel.textContent = 'СКЛЕЙКА...';
-    progFill.style.width = '87%';
+    const renderArgs = [];
+    inputNames.forEach(n => renderArgs.push('-i', n));
+    renderArgs.push(
+      '-filter_complex', filterParts.join(';'),
+      '-map', '[vout]',
+      '-map', '[aout]',
+      '-c:v', 'libvpx',
+      '-b:v', String(S.videoBitrate),
+      '-c:a', 'libopus',
+      '-b:a', String(S.audioBitrate),
+      'output.webm'
+    );
 
-    let finalData;
-    if (processedNames.length === 1) {
-      finalData = ffmpeg.FS('readFile', processedNames[0]);
-    } else {
-      const listContent = processedNames.map(n => `file '${n}'`).join('\n');
-      ffmpeg.FS('writeFile', 'list.txt', new TextEncoder().encode(listContent));
-      await ffmpeg.run('-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', 'output.webm');
-      try { ffmpeg.FS('unlink', 'list.txt'); } catch(e) {}
-      finalData = ffmpeg.FS('readFile', 'output.webm');
-      try { ffmpeg.FS('unlink', 'output.webm'); } catch(e) {}
-    }
+    await ffmpeg.run(...renderArgs);
 
-    if (!finalData || finalData.length < 1000) throw new Error('Файл порожній');
-
-    processedNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e){} });
+    inputNames.forEach(n => { try { ffmpeg.FS('unlink', n); } catch(e){} });
     await new Promise(r => setTimeout(r, 50));
 
     progLabel.textContent = 'ЗБЕРЕЖЕННЯ...';
-    progFill.style.width = '96%';
+    progFill.style.width = '95%';
 
-    const mimeType = takesList[0].mimeType || 'video/webm';
-    const url = URL.createObjectURL(new Blob([finalData.buffer], { type: mimeType }));
+    const finalData = ffmpeg.FS('readFile', 'output.webm');
+    if (!finalData || finalData.length < 1000) throw new Error('Файл порожній');
+    try { ffmpeg.FS('unlink', 'output.webm'); } catch(e) {}
+
+    const url = URL.createObjectURL(new Blob([finalData.buffer], { type: 'video/webm' }));
     const a = document.createElement('a');
     a.href = url; a.download = `TAKE_${Date.now()}.webm`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
@@ -798,7 +791,6 @@ async function startRender() {
     progFill.style.width = '100%';
     progLabel.textContent = 'ГОТОВО! НАТИСНІТЬ ЗАКРИТИ';
     document.getElementById('render-close-btn').style.display = 'block';
-    // НЕ закриваємо автоматично — чекаємо кнопку
 
     hideFreezeFrame();
     await updateUI();
