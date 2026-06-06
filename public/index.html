@@ -777,7 +777,7 @@ async function startRender() {
     label.textContent = 'ЗАВАНТАЖЕННЯ FFMPEG...'; fill.style.width = '5%';
     const { createFFmpeg, fetchFile } = FFmpeg;
     const ffmpeg = createFFmpeg({
-      corePath: '/ffmpeg/ffmpeg-core.js', log: false,
+      corePath: '/ffmpeg/ffmpeg-core.js', log: true,
       progress: ({ ratio }) => {
         if (ratio > 0) {
           fill.style.width = `${50 + ratio * 44}%`;
@@ -813,21 +813,21 @@ async function startRender() {
         'output.mp4'
       );
     } else {
-      // Кілька дублів — filter_complex concat
-      // Будуємо: -i take0.webm -i take1.webm ... -filter_complex "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]"
+      // Кілька дублів — filter_complex concat зі scale всередині
       const inputs = [];
       for (let i = 0; i < takes.length; i++) {
         inputs.push('-i', `take${i}.webm`);
       }
-      const streams = takes.map((_, i) => `[${i}:v][${i}:a]`).join('');
-      const filterComplex = `${streams}concat=n=${takes.length}:v=1:a=1[v][a]`;
+      // Scale кожен вхід до кратного 2, потім concat
+      const scaleParts = takes.map((_, i) => `[${i}:v]scale=trunc(iw/2)*2:trunc(ih/2)*2[v${i}]`).join(';');
+      const concatInputs = takes.map((_, i) => `[v${i}][${i}:a]`).join('');
+      const filterComplex = `${scaleParts};${concatInputs}concat=n=${takes.length}:v=1:a=1[vout][aout]`;
 
       await ffmpeg.run(
         ...inputs,
         '-filter_complex', filterComplex,
-        '-map', '[v]',
-        '-map', '[a]',
-        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        '-map', '[vout]',
+        '-map', '[aout]',
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-crf', '23',
@@ -838,9 +838,18 @@ async function startRender() {
       );
     }
 
+    // Перевіряємо що файл реально створився
+    let outputData;
+    try {
+      outputData = ffmpeg.FS('readFile', 'output.mp4');
+    } catch(e) {
+      throw new Error('FFmpeg не створив output.mp4 — перевір консоль для деталей');
+    }
+    if (!outputData || outputData.length < 1000) {
+      throw new Error('output.mp4 порожній або пошкоджений');
+    }
     fill.style.width = '97%'; label.textContent = 'ЗБЕРЕЖЕННЯ...';
-    const data = ffmpeg.FS('readFile', 'output.mp4');
-    const blob = new Blob([data.buffer], { type: 'video/mp4' });
+    const blob = new Blob([outputData.buffer], { type: 'video/mp4' });
     fill.style.width = '100%'; label.textContent = 'ГОТОВО!';
     await new Promise(r => setTimeout(r, 400));
 
