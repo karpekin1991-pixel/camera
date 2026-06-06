@@ -617,7 +617,7 @@ async function _openModal() {
 function closeModal() { document.getElementById('modal-overlay').classList.remove('show'); }
 
 
-// ── АНАЛІЗ ТИШІ через ffmpeg (16kHz mono WAV — швидко і мало RAM) ──
+// ── АНАЛІЗ ТИШІ через ffmpeg (16kHz mono WAV) ──
 async function analyzeAudioBoundsFFmpeg(ffmpeg, inName) {
   const wavName = inName + '_a.wav';
   try {
@@ -636,16 +636,34 @@ async function analyzeAudioBoundsFFmpeg(ffmpeg, inName) {
     const total = len / sr;
     const threshold = Math.pow(10, S.trimThreshold / 20);
 
+    addRenderLog(`[АНАЛІЗ] ${inName}: тривалість=${total.toFixed(3)}с поріг=${S.trimThreshold}dB (${threshold.toFixed(6)})`);
+
     let startSample = 0;
     for (let i = 0; i < len; i++) { if (Math.abs(data[i]) > threshold) { startSample = i; break; } }
     let endSample = len - 1;
     for (let i = len - 1; i >= 0; i--) { if (Math.abs(data[i]) > threshold) { endSample = i; break; } }
 
-    const start = Math.max(0, startSample / sr - 0.05);
-    const end = Math.min(total, endSample / sr + 0.05);
-    if (start < 0.15 && (total - end) < 0.15) return null;
+    const startSec = startSample / sr;
+    const endSec = endSample / sr;
+    const start = Math.max(0, startSec - 0.05);
+    const end = Math.min(total, endSec + 0.05);
+
+    // Знаходимо максимальну амплітуду для діагностики
+    let maxAmp = 0;
+    for (let i = 0; i < len; i++) { const a = Math.abs(data[i]); if (a > maxAmp) maxAmp = a; }
+    const maxDb = 20 * Math.log10(maxAmp + 1e-10);
+
+    addRenderLog(`[АНАЛІЗ] перший звук=${startSec.toFixed(3)}с останній=${endSec.toFixed(3)}с maxAmplitude=${maxAmp.toFixed(4)} (${maxDb.toFixed(1)}dB)`);
+    addRenderLog(`[АНАЛІЗ] тиша на початку=${start.toFixed(3)}с тиша в кінці=${(total-end).toFixed(3)}с`);
+
+    if (start < 0.05 && (total - end) < 0.05) {
+      addRenderLog(`[АНАЛІЗ] → тиша незначна, trim не потрібен`);
+      return null;
+    }
+    addRenderLog(`[АНАЛІЗ] → TRIM: від ${start.toFixed(3)}с до ${end.toFixed(3)}с`);
     return { start, end };
   } catch(e) {
+    addRenderLog(`[АНАЛІЗ] ПОМИЛКА для ${inName}: ${e.message}`);
     console.warn('Audio analysis failed for', inName, e);
     return null;
   }
@@ -711,14 +729,17 @@ async function startRender() {
       const outName = `proc_${i}.webm`;
 
       if (b) {
+        // -ss після -i для webm з Duration:N/A — точніший seek
+        addRenderLog(`[TRIM] ${inputNames[i]}: вирізаємо від ${b.start.toFixed(3)}с тривалість ${(b.end-b.start).toFixed(3)}с`);
         await ffmpeg.run(
-          '-ss', b.start.toFixed(3),
           '-i', inputNames[i],
+          '-ss', b.start.toFixed(3),
           '-t', (b.end - b.start).toFixed(3),
           '-c', 'copy',
           outName
         );
       } else {
+        addRenderLog(`[TRIM] ${inputNames[i]}: trim не потрібен, копіюємо`);
         await ffmpeg.run('-i', inputNames[i], '-c', 'copy', outName);
       }
 
