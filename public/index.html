@@ -226,6 +226,15 @@
       </div>
     </div>
     <div class="setting-row">
+      <div class="toggle-row">
+        <span class="toggle-label">ЗБЕРІГАТИ ДУБЛІ МІЖ СЕСІЯМИ</span>
+        <div id="toggle-keep" class="toggle" onclick="toggleKeepTakes()"></div>
+      </div>
+      <div style="font-size:10px;color:rgba(240,237,232,0.3);letter-spacing:1px;line-height:1.8;margin-top:8px">
+        Якщо вимкнено — дублі видаляються при закритті браузера
+      </div>
+    </div>
+    <div class="setting-row">
       <div class="setting-label">ВИКОРИСТАННЯ ДИСКУ <span id="mem-label">0.0 MB</span></div>
       <div style="font-size:10px;color:rgba(240,237,232,0.3);letter-spacing:1px;line-height:1.8">
         При <span id="mem-mbps">8</span> Mbps ≈ <span id="mem-per-min">60</span> MB/хв
@@ -239,6 +248,8 @@
   <h2>МОНТАЖ...</h2>
   <div class="progress-bar-wrap"><div id="progress-fill"></div></div>
   <div id="render-label">ПІДГОТОВКА</div>
+  <div id="render-log" style="margin-top:16px;width:100%;max-width:360px;max-height:200px;overflow-y:auto;font-size:9px;letter-spacing:1px;color:rgba(240,237,232,0.35);line-height:1.8;text-align:left;word-break:break-all;display:none"></div>
+  <button id="render-close-btn" onclick="closeRenderProgress()" style="display:none;margin-top:20px;padding:12px 32px;border-radius:10px;border:1px solid rgba(240,237,232,0.2);background:transparent;color:rgba(240,237,232,0.6);font-family:JetBrains Mono,monospace;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;cursor:pointer">ЗАКРИТИ</button>
 </div>
 
 <div id="no-camera">
@@ -324,6 +335,7 @@ let S = {
   fps: 30,
   trimSilence: false,
   trimThreshold: -40,
+  keepTakes: false,  // за замовчуванням не зберігати між сесіями
 };
 
 function loadSettings() {
@@ -353,6 +365,7 @@ async function applySettingsToUI() {
   document.getElementById('trim-options').style.display = S.trimSilence ? 'block' : 'none';
   document.getElementById('trim-slider').value = S.trimThreshold;
   document.getElementById('trim-label').textContent = `${S.trimThreshold} dB`;
+  document.getElementById('toggle-keep').classList.toggle('on', S.keepTakes);
   await updateMemLabel();
 }
 
@@ -368,9 +381,24 @@ function setAudio(input) { S.audioBitrate = parseInt(input.value)*1000; document
 function setOpacity(input) { S.freezeOpacity=parseInt(input.value)/100; document.getElementById('opacity-label').textContent=`${input.value}%`; document.getElementById('freeze-canvas').style.opacity=S.freezeOpacity; saveSettings(); }
 function toggleTrim() { S.trimSilence=!S.trimSilence; document.getElementById('toggle-trim').classList.toggle('on',S.trimSilence); document.getElementById('trim-options').style.display=S.trimSilence?'block':'none'; saveSettings(); }
 function setTrimThreshold(input) { S.trimThreshold=parseInt(input.value); document.getElementById('trim-label').textContent=`${input.value} dB`; saveSettings(); }
+function toggleKeepTakes() { S.keepTakes=!S.keepTakes; document.getElementById('toggle-keep').classList.toggle('on',S.keepTakes); saveSettings(); }
 function openSettings() { updateMemLabel().then(()=>document.getElementById('settings-overlay').classList.add('show')); }
 function closeSettings() { document.getElementById('settings-overlay').classList.remove('show'); }
 function showStatus(msg) { document.getElementById('status-msg').textContent = msg; }
+
+function closeRenderProgress() {
+  document.getElementById('render-progress').classList.remove('show');
+  document.getElementById('render-log').style.display = 'none';
+  document.getElementById('render-log').textContent = '';
+  document.getElementById('render-close-btn').style.display = 'none';
+}
+
+function addRenderLog(msg) {
+  const log = document.getElementById('render-log');
+  log.style.display = 'block';
+  log.textContent += msg + '\n';
+  log.scrollTop = log.scrollHeight;
+}
 
 async function updateUI() {
   const list = await dbGetTakes();
@@ -407,7 +435,14 @@ async function initFFmpeg() {
   isFFmpegLoading = true;
   const { createFFmpeg } = FFmpeg;
   // Локальний ffmpeg з /ffmpeg/ папки
-  ffmpegInstance = createFFmpeg({ log: false, corePath: '/ffmpeg/ffmpeg-core.js' });
+  ffmpegInstance = createFFmpeg({
+    log: false,
+    corePath: '/ffmpeg/ffmpeg-core.js',
+    logger: ({ type, message }) => {
+      // Збираємо логи для відображення
+      if (type === 'fferr' || type === 'ffout') addRenderLog(message);
+    }
+  });
   try { await ffmpegInstance.load(); }
   catch(e) { console.error('FFmpeg load error:', e); ffmpegInstance = null; }
   finally { isFFmpegLoading = false; }
@@ -417,8 +452,11 @@ async function initFFmpeg() {
 async function init() {
   loadSettings();
   await applySettingsToUI();
+  // Якщо keepTakes вимкнено — очищаємо дублі від попередньої сесії
+  if (!S.keepTakes) {
+    await dbClearAll();
+  }
   await startCamera(facingMode);
-  // Фонове завантаження ffmpeg
   initFFmpeg();
 }
 
@@ -722,8 +760,9 @@ async function startRender() {
 
     await dbClearAll();
     progFill.style.width = '100%';
-    progLabel.textContent = 'ГОТОВО!';
-    await new Promise(r => setTimeout(r, 600));
+    progLabel.textContent = 'ГОТОВО! НАТИСНІТЬ ЗАКРИТИ';
+    document.getElementById('render-close-btn').style.display = 'block';
+    // НЕ закриваємо автоматично — чекаємо кнопку
 
     hideFreezeFrame();
     await updateUI();
@@ -736,15 +775,27 @@ async function startRender() {
     try { ffmpeg.FS('unlink', 'output.webm'); } catch(e) {}
     try { ffmpeg.FS('unlink', 'list.txt'); } catch(e) {}
     progLabel.textContent = 'ПОМИЛКА: ' + err.message;
-    await new Promise(r => setTimeout(r, 4000));
+    addRenderLog('ERROR: ' + err.message);
+    document.getElementById('render-close-btn').style.display = 'block';
+    // НЕ закриваємо — показуємо лог і кнопку закрити
   } finally {
-    progWindow.classList.remove('show');
+    // НЕ прибираємо show тут — закривається тільки кнопкою
   }
 }
 
 // ── BLUETOOTH / КЛАВІАТУРА ──
-const TRIGGER_KEYS = new Set([' ','Enter','ArrowUp','ArrowDown','MediaPlayPause','MediaPlay','MediaPause','VolumeUp','VolumeDown','F5','F8','PageUp','PageDown']);
-document.addEventListener('keydown', e => { if (TRIGGER_KEYS.has(e.key)) { e.preventDefault(); handleRecord(); } });
+const TRIGGER_KEYS = new Set([' ','Enter','ArrowUp','ArrowDown','MediaPlayPause','MediaPlay','MediaPause','PageUp','PageDown']);
+document.addEventListener('keydown', e => {
+  // VolumeUp — запис/пауза
+  if (e.key === 'VolumeUp' || e.key === 'F8') {
+    e.preventDefault(); handleRecord(); return;
+  }
+  // VolumeDown — видалити останній дубль
+  if (e.key === 'VolumeDown' || e.key === 'F5') {
+    e.preventDefault(); handleDelete(); return;
+  }
+  if (TRIGGER_KEYS.has(e.key)) { e.preventDefault(); handleRecord(); }
+});
 let gamepadPolling = false;
 window.addEventListener('gamepadconnected', () => {
   if (gamepadPolling) return; gamepadPolling = true;
