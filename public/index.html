@@ -268,8 +268,8 @@ let sessionMimeType = null;
 
 const SETTINGS_KEY = 'take_app_v2';
 let S = {
-  videoBitrate: 8_000_000,
-  audioBitrate: 128_000,
+  videoBitrate: 8000000,
+  audioBitrate: 128000,
   freezeOpacity: 0.35,
   fps: 30,
   trimSilence: false,
@@ -284,10 +284,10 @@ function saveSettings() {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(S)); } catch(e) {}
 }
 function applySettingsToUI() {
-  document.querySelectorAll('.quality-btn[data-mbps]').forEach(b => b.classList.toggle('active', parseInt(b.dataset.mbps) === S.videoBitrate/1_000_000));
-  document.getElementById('quality-label').textContent = `${S.videoBitrate/1_000_000} Mbps`;
-  document.getElementById('mem-mbps').textContent = S.videoBitrate/1_000_000;
-  document.getElementById('mem-per-min').textContent = Math.round(S.videoBitrate/1_000_000*60/8);
+  document.querySelectorAll('.quality-btn[data-mbps]').forEach(b => b.classList.toggle('active', parseInt(b.dataset.mbps) === S.videoBitrate/1000000));
+  document.getElementById('quality-label').textContent = `${S.videoBitrate/1000000} Mbps`;
+  document.getElementById('mem-mbps').textContent = S.videoBitrate/1000000;
+  document.getElementById('mem-per-min').textContent = Math.round(S.videoBitrate/1000000*60/8);
   document.querySelectorAll('.quality-btn[data-fps]').forEach(b => b.classList.toggle('active', parseInt(b.dataset.fps) === S.fps));
   document.getElementById('fps-label').textContent = `${S.fps} fps`;
   document.getElementById('audio-slider').value = S.audioBitrate/1000;
@@ -303,7 +303,7 @@ function applySettingsToUI() {
 function setQuality(btn) {
   document.querySelectorAll('.quality-btn[data-mbps]').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  S.videoBitrate = parseInt(btn.dataset.mbps) * 1_000_000;
+  S.videoBitrate = parseInt(btn.dataset.mbps) * 1000000;
   sessionMimeType = null;
   document.getElementById('quality-label').textContent = `${btn.dataset.mbps} Mbps`;
   document.getElementById('mem-mbps').textContent = btn.dataset.mbps;
@@ -365,6 +365,8 @@ async function startCamera(facing) {
   video.srcObject = stream;
   // Дзеркало: тільки фронтальна — завжди, задня — ніколи
   video.classList.toggle('mirrored', facing === 'user');
+  // Явно запускаємо відтворення — на деяких браузерах autoplay не спрацьовує
+  try { await video.play(); } catch(e) {}
   updateUI();
 }
 
@@ -491,7 +493,7 @@ function openModal() {
   if (isRecording) stopRecording();
   document.getElementById('modal-desc').textContent = `${takes.length} ${pluralTake(takes.length)} будуть склеєні в одне відео`;
   document.getElementById('modal-takes').innerHTML = takes.map((t,i) => {
-    const mb = (t.blob.size/1_000_000).toFixed(1);
+    const mb = (t.blob.size/1000000).toFixed(1);
     return `<div class="modal-take-chip">ДУБЛЬ ${i+1} · ${mb}MB</div>`;
   }).join('');
   document.getElementById('modal-overlay').classList.add('show');
@@ -691,7 +693,7 @@ function updateUI() {
 }
 
 function updateMemLabel() {
-  const mb = (takes.reduce((s,t)=>s+t.blob.size,0)/1_000_000).toFixed(1);
+  const mb = (takes.reduce((s,t)=>s+t.blob.size,0)/1000000).toFixed(1);
   document.getElementById('mem-label').textContent = `${mb} MB`;
 }
 
